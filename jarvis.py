@@ -64,6 +64,7 @@ ASSISTANT_NAME = "Jarvis"
 ASR_CORRECTIONS = [
     (r'\b(jar\s*vis|jar\s*vas|jar\s*vez|jar\s*viss|jaa+r\s*vis|jar\s*wes|jar\s*wis|jar\s*vish|jer\s*vish|javas|dar\s*vis|jhar\s*vis)\b', 'jarvis'),
     (r'\b(jarvis\s*ji)\b', 'jarvis'),
+    (r'\b(tab\s*let|tablate|tablit|teb\s*let|tablets?)\b', 'tablet'),
     (r'\b(your\s*tube|you\s*tube|your\s*cube|you\s*cube|u\s*tube|utube|yoo\s*tube|youtub)\b', 'youtube'),
     (r'\b(youtube\s*musi[ck]|yt\s*musi[ck])\b', 'youtube music'),
     (r'\b(youtube\s*stud[yi]o|yt\s*studio)\b', 'youtube studio'),
@@ -83,6 +84,7 @@ def correct_asr_text(text):
     for pat, repl in ASR_CORRECTIONS:
         t = re.sub(pat, repl, t, flags=re.IGNORECASE)
     t = re.sub(r'\s+', ' ', t).strip()
+    t = t.replace("टैबलेट", "tablet").replace("टेबलेट", "tablet").replace("टैब", "tablet")
     t = re.sub(r'\byoutube\s+musi[ck]\b', 'youtube music', t)
     t = re.sub(r'\byoutube\s+stud[yi]o\b', 'youtube studio', t)
     return t
@@ -586,8 +588,29 @@ def _tablet_close_package(pkg, timeout=12):
 
 
 def handle_tablet_command(t, response_lang="en"):
-    tl = (t or "").lower()
-    tablet_words = ("tablet", "tab", "galaxy tab", "samsung tab", "pad", "sm-t385", "smt385")
+    raw = t or ""
+    tl = raw.lower().replace("टैबलेट", "tablet").replace("टेबलेट", "tablet").replace("टैब", "tablet")
+    # lightweight Hindi intent normalization for tablet commands
+    repls = [
+        (r"\b(par|pe|mein|me|ka|ki|ko)\b", " "),
+        (r"\b(kholo|khol do|khol dena|khol|chalu karo|start karo|open karo)\b", " open "),
+        (r"\b(band karo|band kar do|band kar|band|close karo)\b", " close "),
+        (r"\b(chalao|chala do|play karo|bajao|suna do|sunao|lagao)\b", " play "),
+        (r"\b(dhundho|dhoondho|khojo|search karo)\b", " search "),
+        (r"\b(aawaz|awaz)\b", " volume "),
+        (r"\b(badhao|badao|zyada|upar)\b", " up "),
+        (r"\b(kam karo|kam|ghatao|neeche)\b", " down "),
+        (r"\b(ghar)\b", " home "),
+        (r"\b(wapas|peeche)\b", " back "),
+        (r"\b(roko|ruk jao|pause)\b", " pause "),
+        (r"\b(jagao)\b", " wake "),
+        (r"\b(yutube|yutub)\b", " youtube "),
+    ]
+    for pat, rep in repls:
+        tl = re.sub(pat, rep, tl)
+    tl = re.sub(r"\s+", " ", tl).strip()
+
+    tablet_words = ("tablet", "tab a", "galaxy tab", "samsung tab", "pad", "sm-t385", "smt385", "tablate", "tablit")
     if not any(w in tl for w in tablet_words):
         return False
 
@@ -1521,6 +1544,22 @@ def execute_command(text):
 
     # Hindi command aliases -> normalize to English keywords where helpful
     hindi_map = [
+        (r'\b(tablet|tab\s*let|tablate|tablit|टैबलेट|टेबलेट)\s*(par|pe|mein|me|ka|ki)?\s*(youtube|yt)\s*(kholo|khol do|khol|chalu karo|open karo)\b', 'tablet open youtube'),
+        (r'\b(youtube|yt)\s*(tablet|tab\s*let|tablate|tablit|टैबलेट|टेबलेट)\s*(par|pe|mein|me)?\s*(kholo|khol do|khol|chalu karo)\b', 'tablet open youtube'),
+        (r'\b(tablet|tab\s*let|tablate|tablit|टैबलेट|टेबलेट)\s*(par|pe|mein|me|ka|ki)?\s*(.+?)\s*(chalao|play karo|bajao|suna do|lagao)\s*(youtube|yt)?\b', r'tablet play \3 on youtube'),
+        (r'\b(tablet|tab\s*let|tablate|tablit|टैबलेट|टेबलेट)\s*(par|pe|mein|me)?\s*(.+?)\s*(youtube|yt)\s*(par|pe)?\s*(chalao|play karo|bajao)\b', r'tablet play \3 on youtube'),
+        (r'\b(tablet|tab\s*let|tablate|tablit|टैबलेट|टेबलेट)\s*(par|pe|mein|me)?\s*(.+?)\s*(kholo|khol do|khol|chalu karo|start karo)\b', r'tablet open \3'),
+        (r'\b(.+?)\s*(tablet|tab\s*let|tablate|tablit|टैबलेट|टेबलेट)\s*(par|pe|mein|me)?\s*(kholo|khol do|khol|chalu karo)\b', r'tablet open \1'),
+        (r'\b(tablet|tab\s*let|tablate|tablit|टैबलेट|टेबलेट)\s*(par|pe|mein|me)?\s*(.+?)\s*(band karo|band kar do|band kar|close karo|hatao)\b', r'tablet close \3'),
+        (r'\b(.+?)\s*(tablet|tab\s*let|tablate|tablit|टैबलेट|टेबलेट)\s*(par|pe|mein|me)?\s*(band karo|band kar do|band kar|close karo)\b', r'tablet close \1'),
+        (r'\b(tablet|tab\s*let|tablate|tablit|टैबलेट|टेबलेट)\s*(ghar|home)\b', 'tablet home'),
+        (r'\b(tablet|tab\s*let|tablate|tablit|टैबलेट|टेबलेट)\s*(wapas|peeche|back)\b', 'tablet back'),
+        (r'\b(tablet|tab\s*let|tablate|tablit|टैबलेट|टेबलेट)\s*(aawaz|volume)\s*(badhao|badao|zyada|upar)\b', 'tablet volume up'),
+        (r'\b(tablet|tab\s*let|tablate|tablit|टैबलेट|टेबलेट)\s*(aawaz|volume)\s*(kam|ghatao|neeche)\b', 'tablet volume down'),
+        (r'\b(tablet|tab\s*let|tablate|tablit|टैबलेट|टेबलेट)\s*(roko|pause|ruk jao)\b', 'tablet play pause'),
+        (r'\b(tablet|tab\s*let|tablate|tablit|टैबलेट|टेबलेट)\s*(chalao|play|resume)\b', 'tablet play pause'),
+        (r'\b(tablet|tab\s*let|tablate|tablit|टैबलेट|टेबलेट)\s*(screen|display)?\s*(band|off)\b', 'tablet screen off'),
+        (r'\b(tablet|tab\s*let|tablate|tablit|टैबलेट|टेबलेट)\s*(jagao|wake|screen on)\b', 'tablet wake'),
         (r'\b(chrome|krom)\s*(kholo|khol do|chalu karo|chalu|khole|khol)\b', 'open chrome'),
         (r'\b(edge|edg)\s*(kholo|khol do|chalu karo)\b', 'open edge'),
         (r'\b(notepad|notpaid)\s*(kholo|khol do)\b', 'open notepad'),
@@ -1559,7 +1598,7 @@ def execute_command(text):
     response_lang = detect_response_lang(t)
 
     # Tablet control (ADB) - Galaxy Tab A 2017 on same Wi-Fi (must run before PC YouTube/app handlers)
-    if "tablet" in t or "tab a" in t or "galaxy tab" in t or "samsung tab" in t or "sm-t385" in t:
+    if any(x in t for x in ["tablet", "tab a", "galaxy tab", "samsung tab", "sm-t385", "tablate", "tablit", "टैबलेट", "टेबलेट"]):
         if handle_tablet_command(t, response_lang=response_lang):
             return
 
