@@ -189,6 +189,11 @@ PREFERRED_MIC_SUBSTRINGS = [
 ]
 DEVICE = os.environ.get("JARVIS_DEVICE")  # resolved to an input device index/name in main()
 
+# Tablet control (ADB). Galaxy Tab A 2017 (SM-T385) detected on this PC.
+# Override: set JARVIS_TABLET_ADB=C:\path\to\adb.exe, JARVIS_TABLET_SERIAL=192.168.1.2:5555
+TABLET_ADB_PATH = os.environ.get("JARVIS_TABLET_ADB") or r"C:\Users\music\platform-tools\adb.exe"
+TABLET_ADB_SERIAL = os.environ.get("JARVIS_TABLET_SERIAL", "192.168.1.2:5555")
+
 def resolve_input_device():
     requested = os.environ.get("JARVIS_DEVICE")
     if requested is not None and str(requested).strip().lower() in ("", "default", "system"):
@@ -441,6 +446,162 @@ def change_volume(delta):
     if cur is None:
         return False
     return set_volume(cur + delta)
+
+# Tablet control via ADB (Samsung/Android over Wi-Fi or USB)
+
+def _adb_cmd(*args, timeout=12):
+    adb = TABLET_ADB_PATH
+    if not adb or not os.path.exists(adb):
+        return False, "ADB not found. Set JARVIS_TABLET_ADB or install Platform Tools."
+    cmd = [adb]
+    if TABLET_ADB_SERIAL:
+        cmd += ["-s", TABLET_ADB_SERIAL]
+    cmd += list(args)
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        out = ((r.stdout or "") + "\n" + (r.stderr or "")).strip()
+        return r.returncode == 0, out
+    except Exception as e:
+        return False, str(e)
+
+
+def _adb_shell(shell_cmd, timeout=12):
+    return _adb_cmd("shell", shell_cmd, timeout=timeout)
+
+
+def tablet_reconnect():
+    adb = TABLET_ADB_PATH
+    if not adb or not os.path.exists(adb):
+        return False, "ADB not found"
+    if not TABLET_ADB_SERIAL or ":" not in TABLET_ADB_SERIAL:
+        return False, "No Wi-Fi tablet serial set (JARVIS_TABLET_SERIAL)"
+    try:
+        r = subprocess.run([adb, "connect", TABLET_ADB_SERIAL], capture_output=True, text=True, timeout=12)
+        out = ((r.stdout or "") + "\n" + (r.stderr or "")).strip().lower()
+        ok = ("connected" in out) or ("already connected" in out)
+        return ok, out
+    except Exception as e:
+        return False, str(e)
+
+
+def handle_tablet_command(t, response_lang="en"):
+    tl = (t or "").lower()
+    tablet_words = ("tablet", "tab", "galaxy tab", "samsung tab", "pad", "sm-t385", "smt385")
+    if not any(w in tl for w in tablet_words):
+        return False
+
+    # Wake/unlock helpers
+    if any(x in tl for x in ["wake", "jagao", "screen on"]):
+        ok, out = _adb_shell("input keyevent 224")
+        speak("Waking tablet" if ok else "Tablet command failed", lang=response_lang)
+        return True
+    if any(x in tl for x in ["unlock screen", "swipe up", "unlock"]):
+        ok, out = _adb_shell("input keyevent 82; input swipe 360 1000 360 300 250")
+        speak("Trying to unlock tablet" if ok else "Tablet command failed", lang=response_lang)
+        return True
+
+    # Navigation / power-like keys (safe subset)
+    if "home" in tl:
+        ok, _ = _adb_shell("input keyevent 3")
+        speak("Tablet home" if ok else "Tablet command failed", lang=response_lang); return True
+    if "back" in tl:
+        ok, _ = _adb_shell("input keyevent 4")
+        speak("Going back on tablet" if ok else "Tablet command failed", lang=response_lang); return True
+    if "recent" in tl or "recents" in tl or "overview" in tl:
+        ok, _ = _adb_shell("input keyevent 187")
+        speak("Tablet recents" if ok else "Tablet command failed", lang=response_lang); return True
+    if "lock tablet" in tl or "screen off" in tl:
+        ok, _ = _adb_shell("input keyevent 223")
+        speak("Turning tablet screen off" if ok else "Tablet command failed", lang=response_lang); return True
+
+    # Media
+    if any(x in tl for x in ["play pause", "play/pause", "pause", "resume", "play music", "pause music"]):
+        ok, _ = _adb_shell("input keyevent 85")
+        speak("Toggled playback on tablet" if ok else "Tablet command failed", lang=response_lang); return True
+    if any(x in tl for x in ["next", "skip"]):
+        ok, _ = _adb_shell("input keyevent 87")
+        speak("Next track on tablet" if ok else "Tablet command failed", lang=response_lang); return True
+    if any(x in tl for x in ["previous", "prev", "back song"]):
+        ok, _ = _adb_shell("input keyevent 88")
+        speak("Previous track on tablet" if ok else "Tablet command failed", lang=response_lang); return True
+
+    # Volume
+    if "mute" in tl or "unmute" in tl:
+        ok, _ = _adb_shell("input keyevent 164")
+        speak("Toggled mute on tablet" if ok else "Tablet command failed", lang=response_lang); return True
+    if "volume up" in tl or "louder" in tl or "aawaz badhao" in tl:
+        steps = 2
+        m = re.search(r'(\d+)', tl)
+        if m:
+            n = int(m.group(1))
+            steps = max(1, min(15, n if n <= 15 else n // 10))
+        ok = True
+        for _ in range(steps):
+            ok, _ = _adb_shell("input keyevent 24")
+            if not ok:
+                break
+        speak("Tablet volume up" if ok else "Tablet command failed", lang=response_lang); return True
+    if "volume down" in tl or "quieter" in tl or "aawaz kam" in tl:
+        steps = 2
+        m = re.search(r'(\d+)', tl)
+        if m:
+            n = int(m.group(1))
+            steps = max(1, min(15, n if n <= 15 else n // 10))
+        ok = True
+        for _ in range(steps):
+            ok, _ = _adb_shell("input keyevent 25")
+            if not ok:
+                break
+        speak("Tablet volume down" if ok else "Tablet command failed", lang=response_lang); return True
+
+    # Apps / URLs
+    if "youtube" in tl:
+        q = tl
+        for kw in tablet_words + ("open", "on", "play", "search", "youtube", "tablet", "please"):
+            q = q.replace(kw, " ")
+        q = re.sub(r'\s+', ' ', q).strip()
+        if q and q not in ("on", "the"):
+            url = f"https://m.youtube.com/results?search_query={requests.utils.quote(q)}"
+        else:
+            url = "https://www.youtube.com/"
+        ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{url}"')
+        speak("Opening YouTube on tablet" if ok else "Tablet command failed", lang=response_lang); return True
+    if "chrome" in tl or "browser" in tl:
+        ok, _ = _adb_shell('am start -a android.intent.action.VIEW -d "https://www.google.com" com.android.chrome')
+        if not ok:
+            ok, _ = _adb_shell('am start -a android.intent.action.VIEW -d "https://www.google.com"')
+        speak("Opening browser on tablet" if ok else "Tablet command failed", lang=response_lang); return True
+    if "settings" in tl:
+        ok, _ = _adb_shell("am start -a android.settings.SETTINGS")
+        speak("Opening tablet settings" if ok else "Tablet command failed", lang=response_lang); return True
+    if "spotify" in tl:
+        ok, _ = _adb_shell("monkey -p com.spotify.music -c android.intent.category.LAUNCHER 1")
+        speak("Opening Spotify on tablet" if ok else "Tablet command failed (Spotify may not be installed)", lang=response_lang); return True
+
+    # Connection/status
+    if "connect" in tl or "reconnect" in tl:
+        ok, out = tablet_reconnect()
+        speak("Tablet connected" if ok else "Tablet reconnect failed. Check Wi-Fi and ADB.", lang=response_lang)
+        if out:
+            print(f"[Tablet ADB] {out}")
+        return True
+    if "status" in tl or "connected" in tl:
+        ok, out = _adb_cmd("get-state", timeout=8)
+        model_ok, model = _adb_shell("getprop ro.product.model", timeout=8)
+        speak(f"Tablet {out or 'unknown'} {('('+model+')') if model_ok and model else ''}", lang=response_lang)
+        return True
+
+    # Generic open URL
+    m = re.search(r'(https?://\S+|www\.\S+)', tl)
+    if m and "open" in tl:
+        url = m.group(1)
+        if url.startswith("www."):
+            url = "https://" + url
+        ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{url}"')
+        speak("Opening link on tablet" if ok else "Tablet command failed", lang=response_lang); return True
+
+    speak("Tablet command not recognized. Try: tablet home, tablet play pause, tablet volume up, or tablet open YouTube.", lang=response_lang)
+    return True
 
 # System commands
 def lock_pc():
@@ -1262,6 +1423,11 @@ def execute_command(text):
     if any(x in t for x in ["stop listening", "go to sleep", "sleep mode", "exit", "quit jarvis", "shutdown jarvis", "so jao jarvis", "jarvis so jao", "chup raho"]):
         speak("Going offline. Say my name when you need me." if response_lang=="en" else "Main offline ja raha hoon. Jab zarurat ho mera naam lena.", lang=response_lang)
         return "sleep"
+
+    # Tablet control (ADB) - Galaxy Tab A 2017 on same Wi-Fi
+    if "tablet" in t or "tab a" in t or "galaxy tab" in t or "samsung tab" in t or "sm-t385" in t:
+        if handle_tablet_command(t, response_lang=response_lang):
+            return
 
     # Time / date
     if "time" in t and ("what" in t or "kya" in t or "bata" in t):
