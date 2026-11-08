@@ -479,20 +479,60 @@ def change_volume(delta):
 
 # Tablet control via ADB (Samsung/Android over Wi-Fi or USB)
 
-def _adb_cmd(*args, timeout=12):
-    adb = TABLET_ADB_PATH
-    if not adb or not os.path.exists(adb):
-        return False, "ADB not found. Set JARVIS_TABLET_ADB or install Platform Tools."
-    cmd = [adb]
-    if TABLET_ADB_SERIAL:
-        cmd += ["-s", TABLET_ADB_SERIAL]
-    cmd += list(args)
+def _adb_exe():
+    # Resolve dynamically (Jarvis.exe cwd/env may differ; user can set JARVIS_TABLET_ADB)
+    return find_adb_executable()
+
+
+def _adb_base_cmd(*args):
+    adb = _adb_exe()
+    if not adb:
+        return None, "ADB not found. Set JARVIS_TABLET_ADB or install Platform Tools."
+    if adb != "adb.exe" and not os.path.exists(adb):
+        return None, f"ADB not found at {adb}. Set JARVIS_TABLET_ADB or place platform-tools beside Jarvis."
+    return [adb] + list(args), None
+
+
+def _run_adb(cmd, timeout=12):
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        kwargs = {"capture_output": True, "text": True, "timeout": timeout}
+        if os.name == "nt" and getattr(sys, "frozen", False):
+            kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        r = subprocess.run(cmd, **kwargs)
         out = ((r.stdout or "") + "\n" + (r.stderr or "")).strip()
         return r.returncode == 0, out
     except Exception as e:
         return False, str(e)
+
+
+def _adb_cmd(*args, timeout=12, serial=None):
+    base, err = _adb_base_cmd(*args)
+    if err:
+        return False, err
+    adb = base[0]
+    sub = base[1:]
+    ser = TABLET_ADB_SERIAL if serial is None else serial
+    tried = []
+    if ser:
+        ok, out = _run_adb([adb, "-s", ser] + sub, timeout=timeout)
+        tried.append((ser, ok, out))
+        if ok:
+            return True, out
+        lo = (out or "").lower()
+        if any(x in lo for x in ("not found", "device offline", "no devices", "unauthorized", "error:")):
+            # fall back to any connected device
+            ok2, out2 = _run_adb([adb] + sub, timeout=timeout)
+            if ok2:
+                return True, out2
+            if ":" in str(ser):
+                _run_adb([adb, "connect", ser], timeout=8)
+                ok3, out3 = _run_adb([adb, "-s", ser] + sub, timeout=timeout)
+                if ok3:
+                    return True, out3
+                return False, out3 or out2 or out
+            return False, out2 or out
+        return False, out
+    return _run_adb([adb] + sub, timeout=timeout)
 
 
 def _adb_shell(shell_cmd, timeout=12):
@@ -541,18 +581,25 @@ def _tablet_media_volume(percent=None, delta_percent=None, stream=3, timeout=12)
 
 
 def tablet_reconnect():
-    adb = TABLET_ADB_PATH
-    if not adb or not os.path.exists(adb):
-        return False, "ADB not found"
+    base, err = _adb_base_cmd("connect", TABLET_ADB_SERIAL or "")
+    if err:
+        return False, err
+    adb = base[0]
     if not TABLET_ADB_SERIAL or ":" not in TABLET_ADB_SERIAL:
+        # try any connected device
+        ok, out = _run_adb([adb, "devices"], timeout=8)
+        if ok and "device" in (out or "") and "List of devices attached" in (out or ""):
+            return True, out
         return False, "No Wi-Fi tablet serial set (JARVIS_TABLET_SERIAL)"
-    try:
-        r = subprocess.run([adb, "connect", TABLET_ADB_SERIAL], capture_output=True, text=True, timeout=12)
-        out = ((r.stdout or "") + "\n" + (r.stderr or "")).strip().lower()
-        ok = ("connected" in out) or ("already connected" in out)
-        return ok, out
-    except Exception as e:
-        return False, str(e)
+    ok, out = _run_adb([adb, "connect", TABLET_ADB_SERIAL], timeout=12)
+    lo = (out or "").lower()
+    ok2 = ("connected" in lo) or ("already connected" in lo)
+    if not ok2:
+        # fallback: maybe USB/other device is already connected
+        okd, outd = _run_adb([adb, "devices"], timeout=8)
+        if okd and re.search(r"\bdevice\b", (outd or "").replace("List of devices attached", "")):
+            return True, outd
+    return ok2, out
 
 
 TABLET_APP_PACKAGES = {
@@ -781,7 +828,16 @@ def handle_tablet_command(t, response_lang="en"):
     if "status" in tl or "connected" in tl:
         ok, out = _adb_cmd("get-state", timeout=8)
         model_ok, model = _adb_shell("getprop ro.product.model", timeout=8)
-        speak(f"Tablet {out or 'unknown'} {('('+model+')') if model_ok and model else ''}", lang=response_lang)
+        detail = (out or "unknown").strip()
+        if not ok or "error" in detail.lower() or "not found" in detail.lower():
+            okr, outr = tablet_reconnect()
+            if okr:
+                ok, out = _adb_cmd("get-state", timeout=8)
+                model_ok, model = _adb_shell("getprop ro.product.model", timeout=8)
+                detail = (out or "unknown").strip()
+        speak(f"Tablet {detail} {('('+model+')') if model_ok and model else ''}".strip(), lang=response_lang)
+        if not ok and out:
+            print(f"[Tablet ADB] {out}")
         return True
 
     # App close (voice): "close <app> on tablet", "tablet close youtube", "force stop <app> on tablet"
