@@ -217,7 +217,7 @@ PREFERRED_MIC_SUBSTRINGS = [
     os.environ.get("JARVIS_MIC_PREFER", "usb pnp audio,usb pnp").split(",")
     if s.strip()
 ]
-DEVICE = os.environ.get("JARVIS_DEVICE")  # resolved to an input device index/name in main()
+DEVICE = os.environ.get("JARVIS_DEVICE", "default" if getattr(sys, "frozen", False) else None)  # EXE uses default mic unless overridden
 
 # Tablet control (ADB). Galaxy Tab A 2017 (SM-T385) detected on this PC.
 # Override: set JARVIS_TABLET_ADB=C:\path\to\adb.exe, JARVIS_TABLET_SERIAL=192.168.1.2:5555
@@ -266,8 +266,8 @@ def resolve_input_device():
     return None
 
 # Local speech recognition (uses GPU + CPU together for speed)
-WHISPER_MODEL_SIZE = os.environ.get("JARVIS_WHISPER_MODEL", "small")   # "tiny" fastest; "small" better EN/HI; "base"/"medium" slower
-WHISPER_DEVICE = os.environ.get("JARVIS_WHISPER_DEVICE", "cuda")       # "cuda" or "cpu" (bat defaults to cpu)
+WHISPER_MODEL_SIZE = os.environ.get("JARVIS_WHISPER_MODEL", "base")   # safer default for packaged EXE
+WHISPER_DEVICE = os.environ.get("JARVIS_WHISPER_DEVICE", "cpu")       # safe default for packaged EXE; set cuda explicitly if ready
 WHISPER_COMPUTE = os.environ.get("JARVIS_WHISPER_COMPUTE", "float16")   # CUDA; auto-fallback handled below
 WHISPER_CPU_THREADS = max(2, (os.cpu_count() or 4) // 2)
 WHISPER_NUM_WORKERS = 1
