@@ -9,6 +9,17 @@ cd C:\Users\music\jarvis-assistant
 # or: .\.venv312\Scripts\python.exe jarvis.py
 ```
 
+## Run always in background (no terminal window)
+Use this so closing a terminal won’t stop Jarvis. It runs `pythonw.exe` hidden and writes logs to `jarvis_background.log`.
+
+- **Start hidden now:** double-click `run_jarvis_background.vbs` (or run `wscript.exe "C:\Users\music\jarvis-assistant\run_jarvis_background.vbs"`).
+- **Stop background Jarvis:** run `powershell -ExecutionPolicy Bypass -File .\stop_jarvis_background.ps1` (stops Jarvis processes launched from this folder).
+- **Auto-start at Windows sign-in:** run `powershell -ExecutionPolicy Bypass -File .\install_jarvis_startup.ps1`. It creates `Jarvis Assistant.lnk` in your Startup folder. Remove that shortcut to disable auto-start.
+- **Logs:** `C:\Users\music\jarvis-assistant\jarvis_background.log`
+- For debugging, set `JARVIS_DEBUG_AUDIO=1` before starting (or edit the VBS env vars).
+
+> One running instance is enough. If you use Startup + manual start, stop the old one first (`stop_jarvis_background.ps1`) to avoid duplicate mic listeners.
+
 ## Speed tuning (`jarvis.py`)
 - `WHISPER_DEVICE="cuda"` (GPU, fastest if available) / `"cpu"`
 - `WHISPER_MODEL_SIZE="tiny"` fastest, `"base"` balanced (default), `"small"` more accurate
