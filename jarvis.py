@@ -484,6 +484,85 @@ def tablet_reconnect():
         return False, str(e)
 
 
+TABLET_APP_PACKAGES = {
+    "youtube": "com.google.android.youtube",
+    "chrome": "com.android.chrome",
+    "browser": "com.android.chrome",
+    "settings": "com.android.settings",
+    "spotify": "com.spotify.music",
+    "gmail": "com.google.android.gm",
+    "maps": "com.google.android.apps.maps",
+    "camera": "com.sec.android.app.camera",
+    "gallery": "com.sec.android.gallery3d",
+    "photos": "com.google.android.apps.photos",
+    "play store": "com.android.vending",
+    "store": "com.android.vending",
+    "whatsapp": "com.whatsapp",
+    "facebook": "com.facebook.katana",
+    "instagram": "com.instagram.android",
+    "netflix": "com.netflix.mediaclient",
+}
+
+
+def _tablet_launch_package(pkg, timeout=12):
+    # 1) Android 7+ explicit launcher resolve (most reliable)
+    ok, out = _adb_shell(
+        f"cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER {pkg}",
+        timeout=timeout,
+    )
+    if ok and out:
+        for line in out.splitlines():
+            line = line.strip()
+            if "/" in line and not line.startswith(("priority=", "Action:", "Category:", "No activity")) and " " not in line:
+                ok2, out2 = _adb_shell(f"am start -n {line}", timeout=timeout)
+                if ok2:
+                    return True, line
+    # 2) monkey (works on many Samsung/older devices)
+    ok, out = _adb_shell(f"monkey -p {pkg} -c android.intent.category.LAUNCHER 1", timeout=timeout)
+    if ok and "No activities found" not in (out or ""):
+        return True, out
+    # 3) generic launcher intent
+    ok, out = _adb_shell(
+        f"am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p {pkg}",
+        timeout=timeout,
+    )
+    return ok, out
+
+
+def _tablet_find_package(query):
+    q = (query or "").lower().strip()
+    if not q:
+        return None, None
+    for name, pkg in TABLET_APP_PACKAGES.items():
+        if name in q or q in name:
+            return name, pkg
+    try:
+        ok, out = _adb_shell("pm list packages", timeout=12)
+        if not ok or not out:
+            return None, None
+        tokens = [t for t in re.findall(r'[a-z0-9]+', q) if len(t) >= 3]
+        if not tokens:
+            return None, None
+        best = None
+        for line in out.splitlines():
+            line = line.strip()
+            if not line.startswith("package:"):
+                continue
+            pkg = line.split(":", 1)[1].strip().lower()
+            if not pkg:
+                continue
+            score = sum(1 for t in tokens if t in pkg)
+            if score <= 0:
+                continue
+            if best is None or score > best[0] or (score == best[0] and len(pkg) < len(best[1])):
+                best = (score, pkg)
+        if best and best[0] >= max(1, len(tokens) - 1):
+            return q, best[1]
+    except Exception:
+        pass
+    return None, None
+
+
 def handle_tablet_command(t, response_lang="en"):
     tl = (t or "").lower()
     tablet_words = ("tablet", "tab", "galaxy tab", "samsung tab", "pad", "sm-t385", "smt385")
@@ -554,30 +633,6 @@ def handle_tablet_command(t, response_lang="en"):
                 break
         speak("Tablet volume down" if ok else "Tablet command failed", lang=response_lang); return True
 
-    # Apps / URLs
-    if "youtube" in tl:
-        q = tl
-        for kw in tablet_words + ("open", "on", "play", "search", "youtube", "tablet", "please"):
-            q = q.replace(kw, " ")
-        q = re.sub(r'\s+', ' ', q).strip()
-        if q and q not in ("on", "the"):
-            url = f"https://m.youtube.com/results?search_query={requests.utils.quote(q)}"
-        else:
-            url = "https://www.youtube.com/"
-        ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{url}"')
-        speak("Opening YouTube on tablet" if ok else "Tablet command failed", lang=response_lang); return True
-    if "chrome" in tl or "browser" in tl:
-        ok, _ = _adb_shell('am start -a android.intent.action.VIEW -d "https://www.google.com" com.android.chrome')
-        if not ok:
-            ok, _ = _adb_shell('am start -a android.intent.action.VIEW -d "https://www.google.com"')
-        speak("Opening browser on tablet" if ok else "Tablet command failed", lang=response_lang); return True
-    if "settings" in tl:
-        ok, _ = _adb_shell("am start -a android.settings.SETTINGS")
-        speak("Opening tablet settings" if ok else "Tablet command failed", lang=response_lang); return True
-    if "spotify" in tl:
-        ok, _ = _adb_shell("monkey -p com.spotify.music -c android.intent.category.LAUNCHER 1")
-        speak("Opening Spotify on tablet" if ok else "Tablet command failed (Spotify may not be installed)", lang=response_lang); return True
-
     # Connection/status
     if "connect" in tl or "reconnect" in tl:
         ok, out = tablet_reconnect()
@@ -600,7 +655,45 @@ def handle_tablet_command(t, response_lang="en"):
         ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{url}"')
         speak("Opening link on tablet" if ok else "Tablet command failed", lang=response_lang); return True
 
-    speak("Tablet command not recognized. Try: tablet home, tablet play pause, tablet volume up, or tablet open YouTube.", lang=response_lang)
+    # YouTube (app first; keep search when user says "search/play ... on youtube")
+    if "youtube" in tl:
+        q = tl
+        for kw in tablet_words + ("open", "launch", "start", "on", "in", "app", "play", "search", "youtube", "tablet", "please", "kholo", "chalao"):
+            q = q.replace(kw, " ")
+        q = re.sub(r'\s+', ' ', q).strip()
+        wants_search = any(k in tl for k in ("search", "play", "find", "dhundho", "chalao"))
+        if wants_search and q and q not in ("on", "the", "app"):
+            url = f"https://m.youtube.com/results?search_query={requests.utils.quote(q)}"
+            ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{url}" com.google.android.youtube')
+            if not ok:
+                ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{url}"')
+            speak("Searching YouTube on tablet" if ok else "Tablet command failed", lang=response_lang); return True
+        ok, out = _tablet_launch_package(TABLET_APP_PACKAGES["youtube"])
+        if not ok:
+            ok, out = _adb_shell('am start -a android.intent.action.VIEW -d "https://www.youtube.com/"')
+        speak("Opening YouTube on tablet" if ok else "Tablet command failed (YouTube app not found)", lang=response_lang)
+        if not ok and out:
+            print(f"[Tablet ADB] {out}")
+        return True
+
+    # App launch (voice): "open <app> on tablet", "launch <app> on tablet"
+    if any(k in tl for k in ("open", "launch", "start", "kholo", "khol", "chalu")):
+        q = tl
+        for kw in tablet_words + ("open", "launch", "start", "on", "in", "app", "application", "the", "please", "kholo", "khol", "do", "chalu", "karo"):
+            q = re.sub(rf'\b{re.escape(kw)}\b', ' ', q)
+        q = re.sub(r'\s+', ' ', q).strip()
+        if q:
+            name, pkg = _tablet_find_package(q)
+            if pkg:
+                ok, out = _tablet_launch_package(pkg)
+                speak(f"Opening {name or q} on tablet" if ok else f"Tablet couldn't open {name or q}", lang=response_lang)
+                if not ok and out:
+                    print(f"[Tablet ADB] {out}")
+                return True
+            speak(f"I couldn't find {q} on the tablet. Try the app name as installed, or say 'tablet open YouTube'.", lang=response_lang)
+            return True
+
+    speak("Tablet command not recognized. Try: tablet open YouTube, tablet open Chrome, tablet home, tablet play pause, tablet volume up.", lang=response_lang)
     return True
 
 # System commands
