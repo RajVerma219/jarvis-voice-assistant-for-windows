@@ -924,10 +924,12 @@ def handle_tablet_command(t, response_lang="en"):
     wants_play_any = wants_play_any or " play " in tl_padded
     if wants_play_any and not any(k in tl for k in ("open", "launch", "start", "close", "stop app", "force stop", "search", "find")):
         q = (t or tl)
-        for kw in tablet_words + ("play", "chalao", "bajao", "suna", "sunao", "lagao", "on", "in", "video", "song", "gaana", "gana", "music", "please", "youtube", "yt", "tablet"):
+        for kw in tablet_words + ("play", "chalao", "bajao", "suna", "sunao", "lagao", "on", "in", "video", "song", "gaana", "gana", "music", "please", "tablet"):
             q = re.sub(rf"\b{re.escape(kw)}\b", " ", q, flags=re.IGNORECASE)
         q = re.sub(r"\s+", " ", q).strip(" ,.-")
         if q and q.lower() not in ("pause", "resume"):
+            if "youtube music" in tl or "yt music" in tl:
+                return bool(play_music_on_youtube(q, response_lang=response_lang, tablet=True))
             return bool(play_video_on_youtube(q, response_lang=response_lang, tablet=True))
 
     # App launch (voice): "open <app> on tablet", "launch <app> on tablet"
@@ -1598,28 +1600,36 @@ def open_in_chrome(url, response_lang="en"):
 
 
 def _youtube_search_top_video_id(query, timeout=8):
-    """Best-effort: resolve a YouTube query to a top video ID for direct autoplay."""
+    """Best-effort: resolve a YouTube query to a top video ID for direct playback."""
     q = (query or "").strip()
     if not q:
         return None
-    try:
-        headers = {"User-Agent": "Mozilla/5.0", "Accept-Language": "en-US,en;q=0.9"}
-        r = requests.get("https://www.youtube.com/results", params={"search_query": q}, headers=headers, timeout=timeout)
-        if r.status_code != 200 or not r.text:
+    headers = {"User-Agent": "Mozilla/5.0", "Accept-Language": "en-US,en;q=0.9"}
+
+    def _extract_vid(text):
+        if not text:
             return None
-        m = re.search(r'var ytInitialData\s*=\s*({.*?});</script>', r.text, flags=re.S)
+        # fast path: watch URLs in initial data
+        m0 = re.search(r'"videoId"\s*:\s*"([A-Za-z0-9_-]{8,15})"', text)
+        if m0:
+            # keep scanning for a playable-looking renderer context below
+            pass
+        m = re.search(r'var ytInitialData\s*=\s*({.*?});</script>', text, flags=re.S)
         if not m:
-            m = re.search(r'"ytInitialData"\s*:\s*({.*?})\s*;</script>', r.text, flags=re.S)
-        if not m:
-            return None
-        data = json.loads(m.group(1))
+            m = re.search(r'"ytInitialData"\s*:\s*({.*?})\s*;</script>', text, flags=re.S)
+        data = None
+        if m:
+            try:
+                data = json.loads(m.group(1))
+            except Exception:
+                data = None
 
         def find_video_id(d):
             if isinstance(d, dict):
                 vr = d.get("videoRenderer")
                 if isinstance(vr, dict):
                     vid = vr.get("videoId")
-                    if isinstance(vid, str) and len(vid) >= 8:
+                    if isinstance(vid, str) and 8 <= len(vid) <= 15:
                         return vid
                 for v in d.values():
                     vid = find_video_id(v)
@@ -1632,13 +1642,44 @@ def _youtube_search_top_video_id(query, timeout=8):
                         return vid
             return None
 
-        return find_video_id(data)
+        if data is not None:
+            vid = find_video_id(data)
+            if vid:
+                return vid
+        # fallback regex in raw HTML
+        m1 = re.search(r'"videoId":"([A-Za-z0-9_-]{8,15})"', text)
+        return m1.group(1) if m1 else None
+
+    try:
+        r = requests.get("https://www.youtube.com/results", params={"search_query": q}, headers=headers, timeout=timeout)
+        if r.status_code == 200 and r.text:
+            vid = _extract_vid(r.text)
+            if vid:
+                return vid
+    except Exception as e:
+        print(f"[YouTube] resolver error: {e}")
+
+    # Invidious fallback (no key; instances can vary)
+    try:
+        for base in ("https://yewtu.be", "https://invidious.nerdvpn.de", "https://inv.nadeko.net"):
+            try:
+                rr = requests.get(f"{base}/api/v1/search", params={"q": q, "type": "video"}, headers=headers, timeout=6)
+                if rr.status_code != 200:
+                    continue
+                items = rr.json() or []
+                for it in items:
+                    vid = (it or {}).get("videoId")
+                    if isinstance(vid, str) and 8 <= len(vid) <= 15:
+                        return vid
+            except Exception:
+                continue
     except Exception:
-        return None
+        pass
+    return None
 
 
 def play_video_on_youtube(query=None, response_lang="en", tablet=False):
-    """Play a YouTube video: resolve top result and open watch URL for autoplay."""
+    """Play a YouTube video: resolve top result and open for playback."""
     q = (query or "").strip()
     if not q:
         url = "https://www.youtube.com/"
@@ -1653,20 +1694,31 @@ def play_video_on_youtube(query=None, response_lang="en", tablet=False):
         return True
 
     vid = _youtube_search_top_video_id(q)
+    if tablet:
+        if vid:
+            app_url = f"vnd.youtube:{vid}"
+            web_url = f"https://m.youtube.com/watch?v={vid}"
+            ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{app_url}" com.google.android.youtube')
+            if not ok:
+                ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{web_url}" com.google.android.youtube')
+            if not ok:
+                ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{web_url}"')
+            spoke = f"Playing {q} on tablet YouTube"
+        else:
+            url = f"https://m.youtube.com/results?search_query={requests.utils.quote(q)}"
+            ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{url}" com.google.android.youtube')
+            if not ok:
+                ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{url}"')
+            spoke = f"Searching {q} on tablet YouTube"
+        speak(spoke if ok else "Tablet command failed", lang=response_lang)
+        return bool(ok)
+
     if vid:
-        url = f"https://www.youtube.com/watch?v={vid}&autoplay=1"
+        url = f"https://www.youtube.com/watch?v={vid}"
         spoke = f"Playing {q} on YouTube"
     else:
         url = f"https://www.youtube.com/results?search_query={requests.utils.quote(q)}"
         spoke = f"Searching {q} on YouTube"
-
-    if tablet:
-        ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{url}" com.google.android.youtube')
-        if not ok:
-            ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{url}"')
-        speak((spoke + " on tablet") if ok else "Tablet command failed", lang=response_lang)
-        return bool(ok)
-
     launched = open_in_chrome(url, response_lang=response_lang)
     if not launched:
         speak(_pick({"en": "I couldn't open Chrome for YouTube.", "hi": "Main YouTube ke liye Chrome nahi khol paya."}, response_lang), lang=response_lang)
@@ -1682,21 +1734,47 @@ def _desktop_try_autoplay_youtube(delay=4.5):
     return None
 
 
-def play_music_on_youtube(query=None, response_lang="en"):
-    """Open YouTube Music (or YouTube search) in Chrome and try to autoplay."""
+def play_music_on_youtube(query=None, response_lang="en", tablet=False):
+    """Open/play YouTube Music. On tablet uses ADB; on PC opens Chrome."""
     try:
-        if query:
-            url = f"https://music.youtube.com/search?q={requests.utils.quote(query)}"
-            spoken = query
+        q = (query or "").strip()
+        if tablet:
+            if q:
+                url = f"https://music.youtube.com/search?q={requests.utils.quote(q)}"
+                ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{url}" com.google.android.apps.youtube.music')
+                if not ok:
+                    ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{url}" com.google.android.youtube')
+                if not ok:
+                    ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{url}"')
+                speak(f"Playing {q} on tablet YouTube Music" if ok else "Tablet command failed", lang=response_lang)
+                return bool(ok)
+            url = "https://music.youtube.com/"
+            ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{url}" com.google.android.apps.youtube.music')
+            if not ok:
+                ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{url}"')
+            speak("Opening YouTube Music on tablet" if ok else "Tablet command failed", lang=response_lang)
+            return bool(ok)
+
+        if q:
+            vid = _youtube_search_top_video_id(q)
+            if vid:
+                url = f"https://music.youtube.com/watch?v={vid}&list=RDAMVM{vid}"
+            else:
+                url = f"https://music.youtube.com/search?q={requests.utils.quote(q)}"
         else:
             url = "https://music.youtube.com/"
-            spoken = None
         launched = open_in_chrome(url, response_lang=response_lang)
-
         if not launched:
-            speak(_pick({"en": "I couldn't open Chrome for YouTube Music.",
-                         "hi": "Main YouTube Music ke liye Chrome nahi khol paya."}, response_lang), lang=response_lang)
+            speak(_pick({"en": "I couldn't open Chrome for YouTube Music.", "hi": "Main YouTube Music ke liye Chrome nahi khol paya."}, response_lang), lang=response_lang)
             return False
+        set_context(last_app="chrome", last_action="play_music", last_path=url)
+        speak(_pick({"en": f"Playing {q} on YouTube Music." if q else "Opening YouTube Music.",
+                     "hi": f"YouTube Music par {q} chala raha hoon." if q else "YouTube Music khol raha hoon."}, response_lang), lang=response_lang)
+        return True
+    except Exception as e:
+        print(f"[Music] {e}")
+        speak(_pick({"en": "I couldn't start music right now.", "hi": "Main abhi gaana start nahi kar paya."}, response_lang), lang=response_lang)
+        return False
 
         set_context(last_app="chrome", last_action="play_music", last_path=url)
         if spoken:
