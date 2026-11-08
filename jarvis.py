@@ -755,6 +755,18 @@ def handle_tablet_command(t, response_lang="en"):
             print(f"[Tablet ADB] {out}")
         return True
 
+    # Default for tablet: "play/chalao ... on tablet" (or any play query) -> YouTube on tablet
+    wants_play_any = any(k in tl for k in (" play ", "chalao", "bajao", "suna", "sunao", "lagao"))
+    tl_padded = f" {tl} "
+    wants_play_any = wants_play_any or " play " in tl_padded
+    if wants_play_any and not any(k in tl for k in ("open", "launch", "start", "close", "stop app", "force stop", "search", "find")):
+        q = tl
+        for kw in tablet_words + ("play", "chalao", "chalao", "bajao", "suna", "sunao", "lagao", "on", "in", "video", "song", "gaana", "gana", "music", "please", "youtube", "yt"):
+            q = re.sub(rf"\b{re.escape(kw)}\b", " ", q)
+        q = re.sub(r"\s+", " ", q).strip(" ,.-")
+        if q and q not in ("pause", "resume"):
+            return bool(play_video_on_youtube(q, response_lang=response_lang, tablet=True))
+
     # App launch (voice): "open <app> on tablet", "launch <app> on tablet"
     if any(k in tl for k in ("open", "launch", "start", "kholo", "khol", "chalu")):
         q = tl
@@ -769,8 +781,19 @@ def handle_tablet_command(t, response_lang="en"):
                 if not ok and out:
                     print(f"[Tablet ADB] {out}")
                 return True
+            # Not an installed app name -> if user intent looks like media, try YouTube on tablet
+            if len(q) >= 2:
+                return bool(play_video_on_youtube(q, response_lang=response_lang, tablet=True))
             speak(f"I couldn't find {q} on the tablet. Try the app name as installed, or say 'tablet open YouTube'.", lang=response_lang)
             return True
+
+    # Generic play-on-tablet fallback (when "tablet" present but no explicit YouTube/app match)
+    q = tl
+    for kw in tablet_words + ("on", "in", "please", "the"):
+        q = re.sub(rf"\b{re.escape(kw)}\b", " ", q)
+    q = re.sub(r"\s+", " ", q).strip(" ,.-")
+    if q and q not in ("status", "connect", "reconnect", "home", "back"):
+        return bool(play_video_on_youtube(q, response_lang=response_lang, tablet=True))
 
     speak("Tablet command not recognized. Try: tablet open/close YouTube, tablet open Chrome, tablet home, tablet play pause, tablet volume up.", lang=response_lang)
     return True
@@ -1557,7 +1580,7 @@ def execute_command(text):
         (r'\b(tablet|tab\s*let|tablate|tablit|टैबलेट|टेबलेट)\s*(aawaz|volume)\s*(badhao|badao|zyada|upar)\b', 'tablet volume up'),
         (r'\b(tablet|tab\s*let|tablate|tablit|टैबलेट|टेबलेट)\s*(aawaz|volume)\s*(kam|ghatao|neeche)\b', 'tablet volume down'),
         (r'\b(tablet|tab\s*let|tablate|tablit|टैबलेट|टेबलेट)\s*(roko|pause|ruk jao)\b', 'tablet play pause'),
-        (r'\b(tablet|tab\s*let|tablate|tablit|टैबलेट|टेबलेट)\s*(chalao|play|resume)\b', 'tablet play pause'),
+        (r'\b(tablet|tab\s*let|tablate|tablit|टैबलेट|टेबलेट)\s*(resume)\b', 'tablet play pause'),
         (r'\b(tablet|tab\s*let|tablate|tablit|टैबलेट|टेबलेट)\s*(screen|display)?\s*(band|off)\b', 'tablet screen off'),
         (r'\b(tablet|tab\s*let|tablate|tablit|टैबलेट|टेबलेट)\s*(jagao|wake|screen on)\b', 'tablet wake'),
         (r'\b(chrome|krom)\s*(kholo|khol do|chalu karo|chalu|khole|khol)\b', 'open chrome'),
