@@ -2,6 +2,30 @@
 # Reduce noisy HF/Whisper warnings on Windows
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 import sys
+
+def get_app_dir():
+    """Directory containing jarvis.py or Jarvis.exe (frozen)."""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def find_adb_executable():
+    configured = os.environ.get("JARVIS_TABLET_ADB")
+    if configured and os.path.exists(configured):
+        return configured
+    for cand in [
+        os.path.join(get_app_dir(), "platform-tools", "adb.exe"),
+        os.path.join(get_app_dir(), "adb.exe"),
+        r"C:\Users\music\platform-tools\adb.exe",
+        "adb.exe",
+    ]:
+        if cand == "adb.exe":
+            return cand
+        if os.path.exists(cand):
+            return cand
+    return configured or r"C:\Users\music\platform-tools\adb.exe"
+
 # Windows console UTF-8 safety (prevents crashes when printing Hindi/Devanagari)
 try:
     if hasattr(sys.stdout, "reconfigure"):
@@ -197,7 +221,7 @@ DEVICE = os.environ.get("JARVIS_DEVICE")  # resolved to an input device index/na
 
 # Tablet control (ADB). Galaxy Tab A 2017 (SM-T385) detected on this PC.
 # Override: set JARVIS_TABLET_ADB=C:\path\to\adb.exe, JARVIS_TABLET_SERIAL=192.168.1.2:5555
-TABLET_ADB_PATH = os.environ.get("JARVIS_TABLET_ADB") or r"C:\Users\music\platform-tools\adb.exe"
+TABLET_ADB_PATH = find_adb_executable()
 TABLET_ADB_SERIAL = os.environ.get("JARVIS_TABLET_SERIAL", "192.168.1.2:5555")
 
 def resolve_input_device():
@@ -2240,10 +2264,10 @@ def ensure_model(lang=None):
     if lang is None:
         lang = "en" if LANGUAGE_MODE == "auto" else LANGUAGE_MODE
     info = VOSK_MODELS.get(lang) or VOSK_MODELS["en"]
-    model_path = os.path.join(os.path.dirname(__file__), info["dir"])
+    model_path = os.path.join(get_app_dir(), info["dir"])
     if os.path.isdir(model_path):
         return model_path
-    model_zip = os.path.join(os.path.dirname(__file__), info["dir"] + ".zip")
+    model_zip = os.path.join(get_app_dir(), info["dir"] + ".zip")
     model_url = info["url"]
     print(f"[Jarvis] Downloading {lang} speech model from {model_url} ...")
     speak(f"Downloading {lang} speech recognition model. This happens once.", lang="en")
@@ -2256,7 +2280,7 @@ def ensure_model(lang=None):
                     if chunk:
                         f.write(chunk)
         with zipfile.ZipFile(model_zip, 'r') as z:
-            z.extractall(os.path.dirname(__file__))
+            z.extractall(get_app_dir())
         try:
             os.remove(model_zip)
         except Exception:
