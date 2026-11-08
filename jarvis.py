@@ -700,19 +700,45 @@ def handle_tablet_command(t, response_lang="en"):
         ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{url}"')
         speak("Opening link on tablet" if ok else "Tablet command failed", lang=response_lang); return True
 
-    # YouTube (app first; keep search when user says "search/play ... on youtube")
-    if "youtube" in tl:
+    # YouTube (app search/open + optional autoplay)
+    if "youtube" in tl or "yt" in tl:
+        wants_play = any(k in tl for k in ("play", "chalao", "bajao", "suna", "sunao", "chalao", "lagao"))
+        wants_search = any(k in tl for k in ("search", "find", "dhundho", "khojo", "dikhao")) or wants_play
         q = tl
-        for kw in tablet_words + ("open", "launch", "start", "on", "in", "app", "play", "search", "youtube", "tablet", "please", "kholo", "chalao"):
-            q = q.replace(kw, " ")
-        q = re.sub(r'\s+', ' ', q).strip()
-        wants_search = any(k in tl for k in ("search", "play", "find", "dhundho", "chalao"))
+        for kw in tablet_words + (
+            "open", "launch", "start", "on", "in", "app", "play", "search", "find", "youtube", "yt",
+            "tablet", "please", "kholo", "khol", "do", "chalao", "bajao", "suna", "sunao", "chalao", "lagao",
+            "video", "song", "gaana", "gana", "music",
+        ):
+            q = re.sub(rf"\b{re.escape(kw)}\b", " ", q)
+        q = re.sub(r"\s+", " ", q).strip(" ,.-")
+
         if wants_search and q and q not in ("on", "the", "app"):
-            url = f"https://m.youtube.com/results?search_query={requests.utils.quote(q)}"
+            url = f"https://www.youtube.com/results?search_query={requests.utils.quote(q)}&autoplay=1"
             ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{url}" com.google.android.youtube')
             if not ok:
                 ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{url}"')
-            speak("Searching YouTube on tablet" if ok else "Tablet command failed", lang=response_lang); return True
+
+            if ok and wants_play:
+                def _tablet_try_autoplay(ser=TABLET_ADB_SERIAL, adb=TABLET_ADB_PATH):
+                    try:
+                        time.sleep(4.0)
+                        cmd = [adb] + (["-s", ser] if ser else []) + ["shell", "input keyevent KEYCODE_DPAD_DOWN"]
+                        subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+                        time.sleep(0.6)
+                        cmd = [adb] + (["-s", ser] if ser else []) + ["shell", "input keyevent KEYCODE_ENTER"]
+                        subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+                        time.sleep(0.6)
+                        cmd = [adb] + (["-s", ser] if ser else []) + ["shell", "input keyevent 85"]
+                        subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+                    except Exception:
+                        pass
+                threading.Thread(target=_tablet_try_autoplay, daemon=True).start()
+                speak(f"Playing {q} on tablet YouTube" if ok else "Tablet command failed", lang=response_lang)
+            else:
+                speak(f"Searching {q} on tablet YouTube" if ok else "Tablet command failed", lang=response_lang)
+            return True
+
         ok, out = _tablet_launch_package(TABLET_APP_PACKAGES["youtube"])
         if not ok:
             ok, out = _adb_shell('am start -a android.intent.action.VIEW -d "https://www.youtube.com/"')
@@ -1483,16 +1509,34 @@ def execute_command(text):
                      "hi": "Chrome mein YouTube Studio khol raha hoon."}, response_lang), lang=response_lang, block=False)
         return
 
-    # "play/search on youtube" (video/site) â€” use Chrome
-    if "on youtube" in t and "youtube music" not in t and "yt music" not in t:
+    # "play/search on youtube" (video/site) — on tablet when requested, else Chrome on PC
+    if ("on youtube" in t and "youtube music" not in t and "yt music" not in t) or (any(x in t for x in ["play", "chalao", "bajao"]) and "youtube" in t and "youtube music" not in t and "yt music" not in t):
         q = t
-        for kw in ["open", "play", "search", "on youtube", "youtube", "kholo", "chalao", "dhundho", "search karo", "please"]:
+        for kw in ["tablet", "tab", "open", "play", "search", "on youtube", "youtube", "kholo", "chalao", "bajao", "dhundho", "search karo", "please", "video", "song", "gaana", "gana"]:
             q = q.replace(kw, " ")
         q = re.sub(r'\s+', ' ', q).strip(" ,.-")
-        url = f"https://www.youtube.com/results?search_query={requests.utils.quote(q)}" if q else "https://www.youtube.com/"
+        if any(x in t for x in ["tablet", "tab a", "galaxy tab", "samsung tab", "sm-t385"]):
+            wants_play = any(x in t for x in ["play", "chalao", "bajao"])
+            if wants_play and q:
+                jarvis_tablet_play = globals().get("handle_tablet_command")
+                if jarvis_tablet_play:
+                    jarvis_tablet_play(f"tablet play {q} on youtube", response_lang=response_lang)
+                    return
+            elif q:
+                url = f"https://www.youtube.com/results?search_query={requests.utils.quote(q)}"
+                ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{url}" com.google.android.youtube')
+                if not ok:
+                    ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{url}"')
+                speak("Searching YouTube on tablet" if ok else "Tablet command failed", lang=response_lang)
+                return
+        if not q:
+            url = "https://www.youtube.com/"
+            open_in_chrome(url, response_lang=response_lang)
+            speak(_pick({"en": "Opening YouTube in Chrome.", "hi": "Chrome mein YouTube khol raha hoon."}, response_lang), lang=response_lang, block=False)
+            return
+        url = f"https://www.youtube.com/results?search_query={requests.utils.quote(q)}"
         open_in_chrome(url, response_lang=response_lang)
-        speak(_pick({"en": f"Opening YouTube in Chrome{(' for ' + q) if q else ''}.",
-                     "hi": f"Chrome mein YouTube khol raha hoon{(' ' + q + ' ke liye') if q else ''}."}, response_lang), lang=response_lang, block=False)
+        speak(_pick({"en": f"Opening YouTube in Chrome for {q}.", "hi": f"Chrome mein YouTube khol raha hoon {q} ke liye."}, response_lang), lang=response_lang, block=False)
         return
 
     # Music commands (YouTube / YouTube Music) - high priority, always Chrome
