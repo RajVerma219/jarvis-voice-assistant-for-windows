@@ -486,6 +486,7 @@ def tablet_reconnect():
 
 TABLET_APP_PACKAGES = {
     "youtube": "com.google.android.youtube",
+    "yt": "com.google.android.youtube",
     "chrome": "com.android.chrome",
     "browser": "com.android.chrome",
     "settings": "com.android.settings",
@@ -503,9 +504,21 @@ TABLET_APP_PACKAGES = {
     "netflix": "com.netflix.mediaclient",
 }
 
+TABLET_APP_ACTIVITIES = {
+    "com.google.android.youtube": "com.google.android.youtube/.app.honeycomb.Shell$HomeActivity",
+    "com.android.chrome": "com.android.chrome/com.google.android.apps.chrome.Main",
+}
+
 
 def _tablet_launch_package(pkg, timeout=12):
-    # 1) Android 7+ explicit launcher resolve (most reliable)
+    # 1) Known explicit activity (fast/reliable on tested devices)
+    act = TABLET_APP_ACTIVITIES.get(pkg)
+    if act:
+        ok, out = _adb_shell(f"am start -n {act}", timeout=timeout)
+        merged = (out or "").lower()
+        if ok or "starting: intent" in merged or "warning: activity not started" in merged:
+            return True, out
+    # 2) Android 7+ explicit launcher resolve
     ok, out = _adb_shell(
         f"cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER {pkg}",
         timeout=timeout,
@@ -515,18 +528,20 @@ def _tablet_launch_package(pkg, timeout=12):
             line = line.strip()
             if "/" in line and not line.startswith(("priority=", "Action:", "Category:", "No activity")) and " " not in line:
                 ok2, out2 = _adb_shell(f"am start -n {line}", timeout=timeout)
-                if ok2:
+                merged = ((out2 or "") + " " + line).lower()
+                if ok2 or "starting: intent" in merged or "warning: activity not started" in merged:
                     return True, line
-    # 2) monkey (works on many Samsung/older devices)
+    # 3) monkey (works on many Samsung/older devices)
     ok, out = _adb_shell(f"monkey -p {pkg} -c android.intent.category.LAUNCHER 1", timeout=timeout)
     if ok and "No activities found" not in (out or ""):
         return True, out
-    # 3) generic launcher intent
+    # 4) generic launcher intent
     ok, out = _adb_shell(
         f"am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p {pkg}",
         timeout=timeout,
     )
-    return ok, out
+    merged = (out or "").lower()
+    return ok or "starting: intent" in merged, out
 
 
 def _tablet_find_package(query):
