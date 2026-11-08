@@ -9,9 +9,16 @@ __pycache__/
 vosk-model-*/
 models/
 
+# PyInstaller / packaged output
+build/
+dist/
+*.spec
+
 # Logs / runtime output
 run*.txt
 *.log
+jarvis_exe.log
+jarvis_background.log
 
 # Secrets / local config
 .env
