@@ -1426,6 +1426,11 @@ def execute_command(text):
     # --- Human-like reasoning / quick intents ---
     response_lang = detect_response_lang(t)
 
+    # Tablet control (ADB) - Galaxy Tab A 2017 on same Wi-Fi (must run before PC YouTube/app handlers)
+    if "tablet" in t or "tab a" in t or "galaxy tab" in t or "samsung tab" in t or "sm-t385" in t:
+        if handle_tablet_command(t, response_lang=response_lang):
+            return
+
     # Direct YouTube / YouTube Music / YouTube Studio commands (always launch in Chrome)
     if "youtube studio" in t or "yt studio" in t or "studio.youtube" in t:
         open_in_chrome("https://studio.youtube.com/", response_lang=response_lang)
