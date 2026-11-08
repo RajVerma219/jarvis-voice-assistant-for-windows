@@ -2556,6 +2556,15 @@ def transcribe_whisper(audio_bytes):
             print(f"[Whisper] Recovery failed: {e2}")
         return "", None
 
+def _exe_startup_log(msg):
+    try:
+        lp = os.path.join(get_app_dir(), "jarvis_exe.log")
+        with open(lp, "a", encoding="utf-8", errors="replace") as f:
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {msg}\n")
+    except Exception:
+        pass
+
+
 def main():
     global LANGUAGE_MODE
     print("=" * 50)
