@@ -656,7 +656,8 @@ def handle_tablet_command(t, response_lang="en"):
     tl = re.sub(r"\s+", " ", tl).strip()
 
     tablet_words = ("tablet", "tab a", "galaxy tab", "samsung tab", "pad", "sm-t385", "smt385", "tablate", "tablit")
-    if not any(w in tl for w in tablet_words):
+    tl_for_gate = re.sub(r"\btab\b", "tablet", tl)
+    if not any(w in tl_for_gate for w in tablet_words) and "tablet" not in tl_for_gate:
         return False
 
     # Wake/unlock helpers
@@ -1634,6 +1635,9 @@ def execute_command(text):
     print(f"[Command] {t}")
 
     # Hindi command aliases -> normalize to English keywords where helpful
+    # Normalize "tab" (your tablet name) to "tablet" so commands route correctly
+    t = re.sub(r"\btab\b", "tablet", t, flags=re.IGNORECASE)
+    tl = re.sub(r"\btab\b", "tablet", tl, flags=re.IGNORECASE)
     hindi_map = [
         (r'\b(tablet|tab\s*let|tablate|tablit|टैबलेट|टेबलेट)\s*(par|pe|mein|me|ka|ki)?\s*(youtube|yt)\s*(kholo|khol do|khol|chalu karo|open karo)\b', 'tablet open youtube'),
         (r'\b(youtube|yt)\s*(tablet|tab\s*let|tablate|tablit|टैबलेट|टेबलेट)\s*(par|pe|mein|me)?\s*(kholo|khol do|khol|chalu karo)\b', 'tablet open youtube'),
@@ -1692,7 +1696,7 @@ def execute_command(text):
     response_lang = detect_response_lang(t)
 
     # Tablet control (ADB) - Galaxy Tab A 2017 on same Wi-Fi (must run before PC YouTube/app handlers)
-    if any(x in t for x in ["tablet", "tab a", "galaxy tab", "samsung tab", "sm-t385", "tablate", "tablit", "टैबलेट", "टेबलेट"]):
+    if any(x in t for x in ["tablet", "tab a", "galaxy tab", "samsung tab", "sm-t385", "tablate", "tablit", "टैबलेट", "टेबलेट"]) or re.search(r"\btab\b", t):
         if handle_tablet_command(t, response_lang=response_lang):
             return
 
