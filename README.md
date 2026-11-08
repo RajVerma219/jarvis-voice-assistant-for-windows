@@ -40,3 +40,16 @@ Configured for Galaxy Tab A 2017 (SM-T385) on the same Wi‑Fi via ADB.
 - Reconnect if needed: `adb connect 192.168.1.2:5555` (tablet IP may change; reserve it in your router).
 - Example voice commands: `Jarvis, tablet status`, `tablet home`, `tablet back`, `tablet open YouTube [query]`, `tablet close YouTube` / `tablet force stop Chrome`, `tablet play pause`, `tablet volume up/down`, `tablet wake`, `tablet screen off`, `tablet reconnect`, `tablet open settings/chrome`.
 - Notes: tablet must be reachable on Wi‑Fi; some actions depend on lock state; unlock/swipe is best-effort and may vary by device/security settings. Closing uses ADB `am force-stop` (the app stops; unsaved in-app state may be lost).
+
+## Build Jarvis.exe (dedicated Windows app)
+Requires .venv312 with dependencies installed.
+
+`powershell
+cd C:\Users\music\jarvis-assistant
+powershell -ExecutionPolicy Bypass -File .\build_jarvis_exe.ps1
+`
+
+- Output: dist\Jarvis\Jarvis.exe (onedir). Keep the whole dist\Jarvis\ folder together.
+- Keep osk-model-* folders beside Jarvis.exe (or in its working directory).
+- ADB/tablet: place platform-tools\adb.exe beside Jarvis.exe (or dist\Jarvis\platform-tools\adb.exe) or set JARVIS_TABLET_ADB.
+- Build is --windowed (no console). For debugging, rebuild without --windowed.
