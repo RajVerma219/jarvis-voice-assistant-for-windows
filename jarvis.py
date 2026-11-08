@@ -702,41 +702,26 @@ def handle_tablet_command(t, response_lang="en"):
 
     # YouTube (app search/open + optional autoplay)
     if "youtube" in tl or "yt" in tl:
-        wants_play = any(k in tl for k in ("play", "chalao", "bajao", "suna", "sunao", "chalao", "lagao"))
-        wants_search = any(k in tl for k in ("search", "find", "dhundho", "khojo", "dikhao")) or wants_play
+        wants_play = any(k in tl for k in ("play", "chalao", "bajao", "suna", "sunao", "lagao"))
+        wants_search = any(k in tl for k in ("search", "find", "dhundho", "khojo", "dikhao"))
         q = tl
         for kw in tablet_words + (
             "open", "launch", "start", "on", "in", "app", "play", "search", "find", "youtube", "yt",
-            "tablet", "please", "kholo", "khol", "do", "chalao", "bajao", "suna", "sunao", "chalao", "lagao",
+            "tablet", "please", "kholo", "khol", "do", "chalao", "bajao", "suna", "sunao", "lagao",
             "video", "song", "gaana", "gana", "music",
         ):
             q = re.sub(rf"\b{re.escape(kw)}\b", " ", q)
         q = re.sub(r"\s+", " ", q).strip(" ,.-")
 
+        if wants_play and q and q not in ("on", "the", "app"):
+            return bool(play_video_on_youtube(q, response_lang=response_lang, tablet=True))
+
         if wants_search and q and q not in ("on", "the", "app"):
-            url = f"https://www.youtube.com/results?search_query={requests.utils.quote(q)}&autoplay=1"
+            url = f"https://www.youtube.com/results?search_query={requests.utils.quote(q)}"
             ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{url}" com.google.android.youtube')
             if not ok:
                 ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{url}"')
-
-            if ok and wants_play:
-                def _tablet_try_autoplay(ser=TABLET_ADB_SERIAL, adb=TABLET_ADB_PATH):
-                    try:
-                        time.sleep(4.0)
-                        cmd = [adb] + (["-s", ser] if ser else []) + ["shell", "input keyevent KEYCODE_DPAD_DOWN"]
-                        subprocess.run(cmd, capture_output=True, text=True, timeout=8)
-                        time.sleep(0.6)
-                        cmd = [adb] + (["-s", ser] if ser else []) + ["shell", "input keyevent KEYCODE_ENTER"]
-                        subprocess.run(cmd, capture_output=True, text=True, timeout=8)
-                        time.sleep(0.6)
-                        cmd = [adb] + (["-s", ser] if ser else []) + ["shell", "input keyevent 85"]
-                        subprocess.run(cmd, capture_output=True, text=True, timeout=8)
-                    except Exception:
-                        pass
-                threading.Thread(target=_tablet_try_autoplay, daemon=True).start()
-                speak(f"Playing {q} on tablet YouTube" if ok else "Tablet command failed", lang=response_lang)
-            else:
-                speak(f"Searching {q} on tablet YouTube" if ok else "Tablet command failed", lang=response_lang)
+            speak(f"Searching {q} on tablet YouTube" if ok else "Tablet command failed", lang=response_lang)
             return True
 
         ok, out = _tablet_launch_package(TABLET_APP_PACKAGES["youtube"])
@@ -1373,7 +1358,6 @@ def _chrome_path():
         if os.path.exists(p):
             return p
     return None
-
 def open_in_chrome(url, response_lang="en"):
     """Open a URL in Google Chrome (uses Chrome's current/default profile)."""
     chrome = _chrome_path()
@@ -1403,24 +1387,90 @@ def open_in_chrome(url, response_lang="en"):
     except Exception:
         return False
 
-def _desktop_try_autoplay_youtube(delay=4.5):
-    """Best-effort: focus/search page load then start playback (YouTube UI varies)."""
+
+def _youtube_search_top_video_id(query, timeout=8):
+    """Best-effort: resolve a YouTube query to a top video ID for direct autoplay."""
+    q = (query or "").strip()
+    if not q:
+        return None
     try:
-        time.sleep(delay)
-        try:
-            pyautogui.hotkey('ctrl', 'l')
-            time.sleep(0.12)
-            pyautogui.press('esc')
-        except Exception:
-            pass
-        for key in ('k', 'space', '/', 'tab', 'enter', 'enter', 'k'):
-            try:
-                pyautogui.press(key)
-                time.sleep(0.45)
-            except Exception:
-                pass
+        headers = {"User-Agent": "Mozilla/5.0", "Accept-Language": "en-US,en;q=0.9"}
+        r = requests.get("https://www.youtube.com/results", params={"search_query": q}, headers=headers, timeout=timeout)
+        if r.status_code != 200 or not r.text:
+            return None
+        m = re.search(r'var ytInitialData\s*=\s*({.*?});</script>', r.text, flags=re.S)
+        if not m:
+            m = re.search(r'"ytInitialData"\s*:\s*({.*?})\s*;</script>', r.text, flags=re.S)
+        if not m:
+            return None
+        data = json.loads(m.group(1))
+
+        def find_video_id(d):
+            if isinstance(d, dict):
+                vr = d.get("videoRenderer")
+                if isinstance(vr, dict):
+                    vid = vr.get("videoId")
+                    if isinstance(vid, str) and len(vid) >= 8:
+                        return vid
+                for v in d.values():
+                    vid = find_video_id(v)
+                    if vid:
+                        return vid
+            elif isinstance(d, list):
+                for v in d:
+                    vid = find_video_id(v)
+                    if vid:
+                        return vid
+            return None
+
+        return find_video_id(data)
     except Exception:
-        pass
+        return None
+
+
+def play_video_on_youtube(query=None, response_lang="en", tablet=False):
+    """Play a YouTube video: resolve top result and open watch URL for autoplay."""
+    q = (query or "").strip()
+    if not q:
+        url = "https://www.youtube.com/"
+        if tablet:
+            ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{url}" com.google.android.youtube')
+            if not ok:
+                ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{url}"')
+            speak("Opening YouTube on tablet" if ok else "Tablet command failed", lang=response_lang)
+            return bool(ok)
+        open_in_chrome(url, response_lang=response_lang)
+        speak(_pick({"en": "Opening YouTube.", "hi": "YouTube khol raha hoon."}, response_lang), lang=response_lang, block=False)
+        return True
+
+    vid = _youtube_search_top_video_id(q)
+    if vid:
+        url = f"https://www.youtube.com/watch?v={vid}&autoplay=1"
+        spoke = f"Playing {q} on YouTube"
+    else:
+        url = f"https://www.youtube.com/results?search_query={requests.utils.quote(q)}"
+        spoke = f"Searching {q} on YouTube"
+
+    if tablet:
+        ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{url}" com.google.android.youtube')
+        if not ok:
+            ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{url}"')
+        speak((spoke + " on tablet") if ok else "Tablet command failed", lang=response_lang)
+        return bool(ok)
+
+    launched = open_in_chrome(url, response_lang=response_lang)
+    if not launched:
+        speak(_pick({"en": "I couldn't open Chrome for YouTube.", "hi": "Main YouTube ke liye Chrome nahi khol paya."}, response_lang), lang=response_lang)
+        return False
+    speak(_pick({"en": f"{spoke}.", "hi": f"YouTube par {q} chala raha hoon." if vid else f"YouTube par {q} dhoondh raha hoon."}, response_lang), lang=response_lang, block=False)
+    if not vid:
+        threading.Thread(target=lambda: _desktop_try_autoplay_youtube(5.2), daemon=True).start()
+    return True
+
+
+def _desktop_try_autoplay_youtube(delay=4.5):
+    """Disabled: keystroke autoplay interferes with Chrome/YouTube UI (can type in search)."""
+    return None
 
 
 def play_music_on_youtube(query=None, response_lang="en"):
@@ -1524,35 +1574,32 @@ def execute_command(text):
     if ("on youtube" in t and "youtube music" not in t and "yt music" not in t) or (any(x in t for x in ["play", "chalao", "bajao"]) and "youtube" in t and "youtube music" not in t and "yt music" not in t):
         q = t
         for kw in ["tablet", "tab", "open", "play", "search", "on youtube", "youtube", "kholo", "chalao", "bajao", "dhundho", "search karo", "please", "video", "song", "gaana", "gana"]:
-            q = q.replace(kw, " ")
+            q = re.sub(rf'\b{re.escape(kw)}\b', ' ', q)
         q = re.sub(r'\s+', ' ', q).strip(" ,.-")
+        wants_play = any(x in t for x in ["play", "chalao", "bajao"])
         if any(x in t for x in ["tablet", "tab a", "galaxy tab", "samsung tab", "sm-t385"]):
-            wants_play = any(x in t for x in ["play", "chalao", "bajao"])
             if wants_play and q:
-                jarvis_tablet_play = globals().get("handle_tablet_command")
-                if jarvis_tablet_play:
-                    jarvis_tablet_play(f"tablet play {q} on youtube", response_lang=response_lang)
-                    return
-            elif q:
+                play_video_on_youtube(q, response_lang=response_lang, tablet=True)
+                return
+            if q:
                 url = f"https://www.youtube.com/results?search_query={requests.utils.quote(q)}"
                 ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{url}" com.google.android.youtube')
                 if not ok:
                     ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{url}"')
                 speak("Searching YouTube on tablet" if ok else "Tablet command failed", lang=response_lang)
                 return
+            play_video_on_youtube(None, response_lang=response_lang, tablet=True)
+            return
         if not q:
-            url = "https://www.youtube.com/"
-            open_in_chrome(url, response_lang=response_lang)
+            open_in_chrome("https://www.youtube.com/", response_lang=response_lang)
             speak(_pick({"en": "Opening YouTube in Chrome.", "hi": "Chrome mein YouTube khol raha hoon."}, response_lang), lang=response_lang, block=False)
             return
-        wants_play = any(x in t for x in ["play", "chalao", "bajao"])
+        if wants_play:
+            play_video_on_youtube(q, response_lang=response_lang, tablet=False)
+            return
         url = f"https://www.youtube.com/results?search_query={requests.utils.quote(q)}"
         open_in_chrome(url, response_lang=response_lang)
-        if wants_play:
-            speak(_pick({"en": f"Playing {q} on YouTube.", "hi": f"YouTube par {q} chala raha hoon."}, response_lang), lang=response_lang, block=False)
-            threading.Thread(target=lambda: _desktop_try_autoplay_youtube(5.2), daemon=True).start()
-        else:
-            speak(_pick({"en": f"Opening YouTube in Chrome for {q}.", "hi": f"Chrome mein YouTube khol raha hoon {q} ke liye."}, response_lang), lang=response_lang, block=False)
+        speak(_pick({"en": f"Searching {q} on YouTube.", "hi": f"YouTube par {q} dhoondh raha hoon."}, response_lang), lang=response_lang, block=False)
         return
 
     # Music commands (YouTube / YouTube Music) - high priority, always Chrome
