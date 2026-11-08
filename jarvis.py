@@ -580,7 +580,21 @@ def _tablet_media_volume(percent=None, delta_percent=None, stream=3, timeout=12)
     return ok2, {"percent": final_pct, "index": target_idx, "min": lo, "max": hi, "out": out2}
 
 
-def tablet_reconnect():
+def _tablet_fail(response_lang, detail=None):
+    msg = "Tablet command failed"
+    d = (str(detail or "")).strip()
+    if d:
+        dl = d.lower()
+        if "adb not found" in dl:
+            msg = "Tablet command failed. ADB not found."
+        elif "unauthorized" in dl:
+            msg = "Tablet command failed. Allow USB or wireless debugging on the tablet."
+        elif "offline" in dl or "not found" in dl or "no devices" in dl or "device" in dl and "not" in dl:
+            msg = "Tablet not connected. Check Wi-Fi ADB and say tablet reconnect."
+        _exe_startup_log(f"tablet fail: {d[:300]}")
+        print(f"[Tablet ADB] {d}")
+    speak(msg, lang=response_lang)
+
     base, err = _adb_base_cmd("connect", TABLET_ADB_SERIAL or "")
     if err:
         return False, err
