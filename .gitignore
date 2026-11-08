@@ -1,0 +1,24 @@
+# Python / env
+.venv*/
+venv/
+__pycache__/
+*.py[cod]
+*.pyd
+
+# Local speech models (large downloads)
+vosk-model-*/
+models/
+
+# Logs / runtime output
+run*.txt
+*.log
+
+# Secrets / local config
+.env
+.env.*
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
