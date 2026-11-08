@@ -683,10 +683,28 @@ def handle_tablet_command(t, response_lang="en"):
         ok, _ = _adb_shell("input keyevent 223")
         speak("Turning tablet screen off" if ok else "Tablet command failed", lang=response_lang); return True
 
-    # Media
-    if any(x in tl for x in ["play pause", "play/pause", "pause", "resume", "play music", "pause music"]):
+    # Media / YouTube on Chrome (tablet)
+    # Explicit toggle
+    if any(x in tl for x in ["play pause", "play/pause", "toggle play", "toggle pause"]):
         ok, _ = _adb_shell("input keyevent 85")
-        speak("Toggled playback on tablet" if ok else "Tablet command failed", lang=response_lang); return True
+        speak("Toggled play/pause on tablet" if ok else "Tablet command failed", lang=response_lang); return True
+    # Pause/resume intents (avoid hijacking "play <query> on tablet")
+    if (("pause" in tl) or ("resume" in tl)) and not any(x in tl for x in ["open", "launch", "start", "search", "find", "dhundho", "khojo"]):
+        # allow "play pause" already handled; block "play <query>"
+        if not re.search(r"\bplay\b\s+[a-z0-9\u0900-\u097F]{2,}", tl):
+            ok, _ = _adb_shell("input keyevent 85")
+            speak("Toggled play/pause on tablet" if ok else "Tablet command failed", lang=response_lang); return True
+    # YouTube/Chrome playback control on tablet
+    if ("youtube" in tl or "chrome" in tl or "browser" in tl) and any(x in tl for x in ["pause", "resume", "play", "roko", "chalao"]) and not any(x in tl for x in ["open", "launch", "start", "search", "find", "dhundho", "khojo"]):
+        if not re.search(r"\bplay\b\s+[a-z0-9\u0900-\u097F]{2,}", tl):
+            ok, _ = _adb_shell("input keyevent 85")
+            speak("Toggled play/pause on tablet" if ok else "Tablet command failed", lang=response_lang); return True
+    if any(x in tl for x in ["pause music", "pause song", "pause video"]):
+        ok, _ = _adb_shell("input keyevent 85")
+        speak("Paused on tablet" if ok else "Tablet command failed", lang=response_lang); return True
+    if any(x in tl for x in ["resume music", "resume song", "resume video"]) or tl.strip() in ("tablet play", "play on tablet"):
+        ok, _ = _adb_shell("input keyevent 85")
+        speak("Resumed on tablet" if ok else "Tablet command failed", lang=response_lang); return True
     if any(x in tl for x in ["next", "skip"]):
         ok, _ = _adb_shell("input keyevent 87")
         speak("Next track on tablet" if ok else "Tablet command failed", lang=response_lang); return True
@@ -1629,10 +1647,13 @@ def execute_command(text):
         (r'\b(tablet|tab\s*let|tablate|tablit|टैबलेट|टेबलेट)\s*(wapas|peeche|back)\b', 'tablet back'),
         (r'\b(tablet|tab\s*let|tablate|tablit|टैबलेट|टेबलेट)\s*(aawaz|volume)\s*(badhao|badao|zyada|upar)\b', 'tablet volume up'),
         (r'\b(tablet|tab\s*let|tablate|tablit|टैबलेट|टेबलेट)\s*(aawaz|volume)\s*(kam|ghatao|neeche)\b', 'tablet volume down'),
+        (r'\b(tablet|tab\s*let|tablate|tablit|टैबलेट|टेबलेट)\s*(par|pe|mein|me)?\s*(youtube|yt|chrome)\s*(par|pe)?\s*(play pause|pause|roko|resume|chalao)\b', 'tablet play pause'),
         (r'\b(tablet|tab\s*let|tablate|tablit|टैबलेट|टेबलेट)\s*(roko|pause|ruk jao)\b', 'tablet play pause'),
         (r'\b(tablet|tab\s*let|tablate|tablit|टैबलेट|टेबलेट)\s*(resume)\b', 'tablet play pause'),
         (r'\b(tablet|tab\s*let|tablate|tablit|टैबलेट|टेबलेट)\s*(screen|display)?\s*(band|off)\b', 'tablet screen off'),
         (r'\b(tablet|tab\s*let|tablate|tablit|टैबलेट|टेबलेट)\s*(jagao|wake|screen on)\b', 'tablet wake'),
+        (r'\b(youtube|yt|chrome)\s*(play pause|pause|resume|roko|chalao)\b', 'youtube play pause'),
+        (r'\b(play pause|pause|resume)\s*(youtube|yt|on youtube|on chrome)\b', 'youtube play pause'),
         (r'\b(chrome|krom)\s*(kholo|khol do|chalu karo|chalu|khole|khol)\b', 'open chrome'),
         (r'\b(edge|edg)\s*(kholo|khol do|chalu karo)\b', 'open edge'),
         (r'\b(notepad|notpaid)\s*(kholo|khol do)\b', 'open notepad'),
@@ -1682,6 +1703,24 @@ def execute_command(text):
                      "hi": "Chrome mein YouTube Studio khol raha hoon."}, response_lang), lang=response_lang, block=False)
         return
 
+    # PC Chrome/YouTube playback toggle (play/pause)
+    if ("youtube" in t or "chrome" in t) and not any(x in t for x in ["tablet", "tab a", "galaxy tab", "samsung tab", "sm-t385", "tablate", "tablit", "टैबलेट", "टेबलेट"]):
+        _wants_open = any(x in t for x in ["open", "launch", "start", "kholo", "khol", "search", "find", "dhundho", "khojo", "play song", "play music"])
+        _has_query_after_play = False
+        if "play" in t and ("youtube" in t or "chrome" in t):
+            qchk = t
+            for kw in ["play", "pause", "resume", "toggle", "on youtube", "youtube", "on chrome", "in chrome", "chrome", "video", "please", "ko", "se", "par", "pe"]:
+                qchk = qchk.replace(kw, " ")
+            _has_query_after_play = len(re.sub(r'\s+', ' ', qchk).strip(" ,.-")) >= 2
+        _toggle_cmd = any(x in t for x in ["play pause", "play/pause", "toggle play", "toggle pause", "pause video", "pause youtube", "pause on youtube", "pause on chrome", "stop video", "resume video", "resume youtube", "youtube roko", "youtube chalao", "video roko"])
+        _simple_toggle = (t.strip() in ("pause youtube", "play youtube", "resume youtube", "pause on youtube", "play on youtube", "youtube play pause", "pause chrome", "play chrome")) or (
+            ("pause" in t or "resume" in t or "play/pause" in t or "play pause" in t) and ("youtube" in t or "on chrome" in t)
+        ) or ("play youtube" in t and not _has_query_after_play)
+        if (_toggle_cmd or _simple_toggle) and not _wants_open and not _has_query_after_play:
+            press_media_key(VK_MEDIA_PLAY_PAUSE)
+            speak(_pick({"en": "Toggled play/pause on YouTube.", "hi": "YouTube par play pause toggle kar diya."}, response_lang), lang=response_lang)
+            return
+
     # "play/search on youtube" (video/site) — on tablet when requested, else Chrome on PC
     if ("on youtube" in t and "youtube music" not in t and "yt music" not in t) or (any(x in t for x in ["play", "chalao", "bajao"]) and "youtube" in t and "youtube music" not in t and "yt music" not in t):
         q = t
@@ -1717,6 +1756,15 @@ def execute_command(text):
     # Music commands (YouTube / YouTube Music) - high priority, always Chrome
     _music_cmd = any(x in t for x in ["play music", "play song", "music chalao", "gaana chalao", "gana chalao", "bajao", "kuch gaana", "koi gaana"])
     _yt_music = ("youtube music" in t) or ("yt music" in t) or ("on youtube music" in t) or ("music.youtube" in t)
+    _pc_toggle = ("youtube" in t or "chrome" in t) and any(x in t for x in ["play pause", "play/pause", "toggle play", "toggle pause"]) and not any(x in t for x in ["open", "search", "find", "dhundho", "khojo", "play "])
+    _pc_pause_resume_yt = ("youtube" in t or "chrome" in t) and not any(x in t for x in ["open", "search", "find", "dhundho", "khojo"]) and (
+        any(x in t for x in ["pause video", "pause youtube", "pause on youtube", "pause on chrome", "stop video", "roko video", "youtube roko"]) or
+        any(x in t for x in ["resume video", "resume youtube", "play youtube", "play on youtube", "play on chrome", "video chalao", "youtube chalao"])
+    )
+    if _pc_toggle or _pc_pause_resume_yt:
+        press_media_key(VK_MEDIA_PLAY_PAUSE)
+        speak(_pick({"en": "Toggled play/pause.", "hi": "Play pause toggle kar diya."}, response_lang), lang=response_lang)
+        return
     if _yt_music or (_music_cmd and t.strip() in ("play music", "play some music", "gaana chalao", "gana chalao", "music chalao", "kuch gaana chalao", "koi gaana chalao")) or ("play" in t and "youtube music" in t):
         q = t
         for kw in ["jarvis", "maalkeen", "malkeen", "à¤œà¤¾à¤°à¥à¤µà¤¿à¤¸", "play", "on youtube music", "on youtube", "youtube music", "yt music", "music chalao", "gaana chalao", "gana chalao", "kuch", "koi", "gaana", "gana", "song", "music", "chalao", "bajao", "please", "mujhe", "mere liye"]:
