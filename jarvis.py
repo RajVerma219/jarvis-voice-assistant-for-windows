@@ -886,30 +886,42 @@ def handle_tablet_command(t, response_lang="en"):
         ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{url}"')
         speak("Opening link on tablet" if ok else "Tablet command failed", lang=response_lang); return True
 
-    # YouTube (app search/open + optional autoplay)
+    # YouTube / YouTube Music (tablet)
+    if "youtube music" in tl or "yt music" in tl:
+        wants_play = any(k in tl for k in ("play", "chalao", "bajao", "suna", "sunao", "lagao"))
+        wants_search = any(k in tl for k in ("search", "find", "dhundho", "khojo", "dikhao"))
+        q = tl
+        for kw in tablet_words + ("open", "launch", "start", "on", "in", "app", "play", "search", "find", "youtube", "yt", "music", "tablet", "please", "kholo", "khol", "do", "chalao", "bajao", "suna", "sunao", "lagao", "video", "song", "gaana", "gana"):
+            q = re.sub(rf"\b{re.escape(kw)}\b", " ", q)
+        q = re.sub(r"\s+", " ", q).strip(" ,.-")
+        if wants_play or (q and not wants_search):
+            return bool(play_music_on_youtube(q if q else None, response_lang=response_lang, tablet=True))
+        if wants_search and q:
+            url = f"https://music.youtube.com/search?q={requests.utils.quote(q)}"
+            ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{url}" com.google.android.apps.youtube.music')
+            if not ok:
+                ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{url}"')
+            speak(f"Searching {q} on tablet YouTube Music" if ok else "Tablet command failed", lang=response_lang)
+            return True
+        return bool(play_music_on_youtube(None, response_lang=response_lang, tablet=True))
+
+    # YouTube (tablet)
     if "youtube" in tl or "yt" in tl:
         wants_play = any(k in tl for k in ("play", "chalao", "bajao", "suna", "sunao", "lagao"))
         wants_search = any(k in tl for k in ("search", "find", "dhundho", "khojo", "dikhao"))
         q = tl
-        for kw in tablet_words + (
-            "open", "launch", "start", "on", "in", "app", "play", "search", "find", "youtube", "yt",
-            "tablet", "please", "kholo", "khol", "do", "chalao", "bajao", "suna", "sunao", "lagao",
-            "video", "song", "gaana", "gana", "music",
-        ):
+        for kw in tablet_words + ("open", "launch", "start", "on", "in", "app", "play", "search", "find", "youtube", "yt", "tablet", "please", "kholo", "khol", "do", "chalao", "bajao", "suna", "sunao", "lagao", "video", "song", "gaana", "gana", "music"):
             q = re.sub(rf"\b{re.escape(kw)}\b", " ", q)
         q = re.sub(r"\s+", " ", q).strip(" ,.-")
-
         if wants_play and q and q not in ("on", "the", "app"):
             return bool(play_video_on_youtube(q, response_lang=response_lang, tablet=True))
-
         if wants_search and q and q not in ("on", "the", "app"):
-            url = f"https://www.youtube.com/results?search_query={requests.utils.quote(q)}"
+            url = f"https://m.youtube.com/results?search_query={requests.utils.quote(q)}"
             ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{url}" com.google.android.youtube')
             if not ok:
                 ok, _ = _adb_shell(f'am start -a android.intent.action.VIEW -d "{url}"')
             speak(f"Searching {q} on tablet YouTube" if ok else "Tablet command failed", lang=response_lang)
             return True
-
         ok, out = _tablet_launch_package(TABLET_APP_PACKAGES["youtube"])
         if not ok:
             ok, out = _adb_shell('am start -a android.intent.action.VIEW -d "https://www.youtube.com/"')
@@ -917,20 +929,6 @@ def handle_tablet_command(t, response_lang="en"):
         if not ok and out:
             print(f"[Tablet ADB] {out}")
         return True
-
-    # Default for tablet: "play/chalao ... on tablet" (or any play query) -> YouTube on tablet
-    wants_play_any = any(k in tl for k in (" play ", "chalao", "bajao", "suna", "sunao", "lagao"))
-    tl_padded = f" {tl} "
-    wants_play_any = wants_play_any or " play " in tl_padded
-    if wants_play_any and not any(k in tl for k in ("open", "launch", "start", "close", "stop app", "force stop", "search", "find")):
-        q = (t or tl)
-        for kw in tablet_words + ("play", "chalao", "bajao", "suna", "sunao", "lagao", "on", "in", "video", "song", "gaana", "gana", "music", "please", "tablet"):
-            q = re.sub(rf"\b{re.escape(kw)}\b", " ", q, flags=re.IGNORECASE)
-        q = re.sub(r"\s+", " ", q).strip(" ,.-")
-        if q and q.lower() not in ("pause", "resume"):
-            if "youtube music" in tl or "yt music" in tl:
-                return bool(play_music_on_youtube(q, response_lang=response_lang, tablet=True))
-            return bool(play_video_on_youtube(q, response_lang=response_lang, tablet=True))
 
     # App launch (voice): "open <app> on tablet", "launch <app> on tablet"
     if any(k in tl for k in ("open", "launch", "start", "kholo", "khol", "chalu")):
