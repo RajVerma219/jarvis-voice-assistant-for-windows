@@ -578,6 +578,13 @@ def _tablet_find_package(query):
     return None, None
 
 
+def _tablet_close_package(pkg, timeout=12):
+    if not pkg:
+        return False, "No package"
+    ok, out = _adb_shell(f"am force-stop {pkg}", timeout=timeout)
+    return ok, out
+
+
 def handle_tablet_command(t, response_lang="en"):
     tl = (t or "").lower()
     tablet_words = ("tablet", "tab", "galaxy tab", "samsung tab", "pad", "sm-t385", "smt385")
@@ -661,6 +668,29 @@ def handle_tablet_command(t, response_lang="en"):
         speak(f"Tablet {out or 'unknown'} {('('+model+')') if model_ok and model else ''}", lang=response_lang)
         return True
 
+    # App close (voice): "close <app> on tablet", "tablet close youtube", "force stop <app> on tablet"
+    close_words = ("close", "stop app", "force stop", "quit app", "exit app", "kill", "band karo", "band kar")
+    explicit_close = any(k in tl for k in close_words) or (re.search(r'\bquit\b', tl) and "youtube" not in tl)
+    if explicit_close:
+        q = tl
+        for kw in tablet_words + ("close", "stop", "force", "quit", "exit", "kill", "app", "application", "band", "karo", "kar", "on", "in", "the", "please", "do", "ho"):
+            q = re.sub(rf'\b{re.escape(kw)}\b', ' ', q)
+        q = re.sub(r'\s+', ' ', q).strip()
+        if q:
+            name, pkg = _tablet_find_package(q)
+            if pkg:
+                ok, out = _tablet_close_package(pkg)
+                speak(f"Closed {name or q} on tablet" if ok else f"Tablet couldn't close {name or q}", lang=response_lang)
+                if not ok and out:
+                    print(f"[Tablet ADB] {out}")
+                return True
+            speak(f"I couldn't find {q} on the tablet to close.", lang=response_lang)
+            return True
+        # no app name -> send Home (minimize current)
+        ok, out = _adb_shell("input keyevent 3")
+        speak("Sent tablet home" if ok else "Tablet command failed", lang=response_lang)
+        return True
+
     # Generic open URL
     m = re.search(r'(https?://\S+|www\.\S+)', tl)
     if m and "open" in tl:
@@ -708,7 +738,7 @@ def handle_tablet_command(t, response_lang="en"):
             speak(f"I couldn't find {q} on the tablet. Try the app name as installed, or say 'tablet open YouTube'.", lang=response_lang)
             return True
 
-    speak("Tablet command not recognized. Try: tablet open YouTube, tablet open Chrome, tablet home, tablet play pause, tablet volume up.", lang=response_lang)
+    speak("Tablet command not recognized. Try: tablet open/close YouTube, tablet open Chrome, tablet home, tablet play pause, tablet volume up.", lang=response_lang)
     return True
 
 # System commands
