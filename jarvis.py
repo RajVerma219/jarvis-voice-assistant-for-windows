@@ -1403,6 +1403,26 @@ def open_in_chrome(url, response_lang="en"):
     except Exception:
         return False
 
+def _desktop_try_autoplay_youtube(delay=4.5):
+    """Best-effort: focus/search page load then start playback (YouTube UI varies)."""
+    try:
+        time.sleep(delay)
+        try:
+            pyautogui.hotkey('ctrl', 'l')
+            time.sleep(0.12)
+            pyautogui.press('esc')
+        except Exception:
+            pass
+        for key in ('k', 'space', '/', 'tab', 'enter', 'enter', 'k'):
+            try:
+                pyautogui.press(key)
+                time.sleep(0.45)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 def play_music_on_youtube(query=None, response_lang="en"):
     """Open YouTube Music (or YouTube search) in Chrome and try to autoplay."""
     try:
@@ -1427,16 +1447,7 @@ def play_music_on_youtube(query=None, response_lang="en"):
             speak(_pick({"en": "Playing music on YouTube Music.",
                          "hi": "YouTube Music par gaana chala raha hoon."}, response_lang), lang=response_lang)
 
-        # Best-effort autoplay: wait for page load then send 'k' (YouTube play/pause) or space
-        def _try_autoplay():
-            try:
-                time.sleep(4.5)
-                pyautogui.press('k')   # YouTube/YT Music play/pause toggle
-                time.sleep(0.5)
-                pyautogui.press('space')
-            except Exception:
-                pass
-        threading.Thread(target=_try_autoplay, daemon=True).start()
+        threading.Thread(target=lambda: _desktop_try_autoplay_youtube(4.8), daemon=True).start()
         return True
     except Exception as e:
         print(f"[Music] {e}")
@@ -1534,9 +1545,14 @@ def execute_command(text):
             open_in_chrome(url, response_lang=response_lang)
             speak(_pick({"en": "Opening YouTube in Chrome.", "hi": "Chrome mein YouTube khol raha hoon."}, response_lang), lang=response_lang, block=False)
             return
+        wants_play = any(x in t for x in ["play", "chalao", "bajao"])
         url = f"https://www.youtube.com/results?search_query={requests.utils.quote(q)}"
         open_in_chrome(url, response_lang=response_lang)
-        speak(_pick({"en": f"Opening YouTube in Chrome for {q}.", "hi": f"Chrome mein YouTube khol raha hoon {q} ke liye."}, response_lang), lang=response_lang, block=False)
+        if wants_play:
+            speak(_pick({"en": f"Playing {q} on YouTube.", "hi": f"YouTube par {q} chala raha hoon."}, response_lang), lang=response_lang, block=False)
+            threading.Thread(target=lambda: _desktop_try_autoplay_youtube(5.2), daemon=True).start()
+        else:
+            speak(_pick({"en": f"Opening YouTube in Chrome for {q}.", "hi": f"Chrome mein YouTube khol raha hoon {q} ke liye."}, response_lang), lang=response_lang, block=False)
         return
 
     # Music commands (YouTube / YouTube Music) - high priority, always Chrome
