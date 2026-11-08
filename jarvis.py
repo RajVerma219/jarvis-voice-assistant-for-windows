@@ -85,8 +85,12 @@ def correct_asr_text(text):
         t = re.sub(pat, repl, t, flags=re.IGNORECASE)
     t = re.sub(r'\s+', ' ', t).strip()
     t = t.replace("टैबलेट", "tablet").replace("टेबलेट", "tablet").replace("टैब", "tablet")
+    # common Hinglish/Hindi ASR mishears in media queries (e.g. "tum" -> "since you're")
+    t = re.sub(r"\bsince\s+you'?re\b", " tum ", t, flags=re.IGNORECASE)
+    t = re.sub(r"\bsince\s+you\s+are\b", " tum ", t, flags=re.IGNORECASE)
     t = re.sub(r'\byoutube\s+musi[ck]\b', 'youtube music', t)
     t = re.sub(r'\byoutube\s+stud[yi]o\b', 'youtube studio', t)
+    t = re.sub(r'\s+', ' ', t).strip()
     return t
 
 
@@ -471,6 +475,47 @@ def _adb_shell(shell_cmd, timeout=12):
     return _adb_cmd("shell", shell_cmd, timeout=timeout)
 
 
+def _tablet_media_volume(percent=None, delta_percent=None, stream=3, timeout=12):
+    """Read/set Android media volume via ADB. percent/delta_percent are 0-100."""
+    ok, out = _adb_shell(f"media volume --show --stream {stream} --get", timeout=timeout)
+    txt = (out or "")
+    m = re.search(r"volume is\s+(\d+)\s+in range\s+\[(\d+)\.\.(\d+)\]", txt)
+    if not m:
+        # fallback: try setting blindly if percent given
+        if percent is not None:
+            p = max(0, min(100, int(percent)))
+            # assume max 15
+            idx = round(p * 15 / 100)
+            ok2, out2 = _adb_shell(f"media volume --show --stream {stream} --set {idx}", timeout=timeout)
+            return ok2, {"percent": p, "index": idx, "max": 15, "out": out2}
+        return False, {"error": txt or "Could not read tablet volume"}
+    cur, lo, hi = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    rng = max(1, hi - lo)
+    cur_pct = round((cur - lo) * 100 / rng)
+    if percent is None and delta_percent is None:
+        return True, {"percent": cur_pct, "index": cur, "min": lo, "max": hi}
+    if delta_percent is not None:
+        target_pct = cur_pct + int(delta_percent)
+    else:
+        target_pct = int(percent)
+    target_pct = max(0, min(100, target_pct))
+    target_idx = lo + round(target_pct * rng / 100)
+    target_idx = max(lo, min(hi, target_idx))
+    ok2, out2 = _adb_shell(f"media volume --show --stream {stream} --set {target_idx}", timeout=timeout)
+    if not ok2:
+        # fallback keyevents
+        diff = target_idx - cur
+        key = "24" if diff > 0 else "25"
+        ok3 = True
+        for _ in range(min(abs(diff), 20)):
+            ok3, out2 = _adb_shell(f"input keyevent {key}", timeout=timeout)
+            if not ok3:
+                break
+        ok2 = ok3
+    final_pct = round((target_idx - lo) * 100 / rng)
+    return ok2, {"percent": final_pct, "index": target_idx, "min": lo, "max": hi, "out": out2}
+
+
 def tablet_reconnect():
     adb = TABLET_ADB_PATH
     if not adb or not os.path.exists(adb):
@@ -653,30 +698,35 @@ def handle_tablet_command(t, response_lang="en"):
     if "mute" in tl or "unmute" in tl:
         ok, _ = _adb_shell("input keyevent 164")
         speak("Toggled mute on tablet" if ok else "Tablet command failed", lang=response_lang); return True
-    if "volume up" in tl or "louder" in tl or "aawaz badhao" in tl:
-        steps = 2
-        m = re.search(r'(\d+)', tl)
-        if m:
-            n = int(m.group(1))
-            steps = max(1, min(15, n if n <= 15 else n // 10))
-        ok = True
-        for _ in range(steps):
-            ok, _ = _adb_shell("input keyevent 24")
-            if not ok:
-                break
-        speak("Tablet volume up" if ok else "Tablet command failed", lang=response_lang); return True
-    if "volume down" in tl or "quieter" in tl or "aawaz kam" in tl:
-        steps = 2
-        m = re.search(r'(\d+)', tl)
-        if m:
-            n = int(m.group(1))
-            steps = max(1, min(15, n if n <= 15 else n // 10))
-        ok = True
-        for _ in range(steps):
-            ok, _ = _adb_shell("input keyevent 25")
-            if not ok:
-                break
-        speak("Tablet volume down" if ok else "Tablet command failed", lang=response_lang); return True
+
+    if "volume" in tl or "awaz" in tl or "aawaz" in tl:
+        nums = [int(x) for x in re.findall(r"\b(\d{1,3})\b", tl)]
+        pct = nums[0] if nums else None
+        if pct is not None:
+            pct = max(0, min(100, pct))
+        # relative
+        if any(x in tl for x in ("up", "badhao", "badao", "zyada", "upar", "increase", "louder", "raise")):
+            delta = pct if pct is not None else 10
+            ok, info = _tablet_media_volume(delta_percent=+delta)
+            speak(f"Tablet volume {info.get('percent', '')}%" if ok and isinstance(info, dict) else "Tablet volume up" if ok else "Tablet command failed", lang=response_lang)
+            return True
+        if any(x in tl for x in ("down", "kam", "ghatao", "neeche", "decrease", "quieter", "lower")):
+            delta = pct if pct is not None else 10
+            ok, info = _tablet_media_volume(delta_percent=-delta)
+            speak(f"Tablet volume {info.get('percent', '')}%" if ok and isinstance(info, dict) else "Tablet volume down" if ok else "Tablet command failed", lang=response_lang)
+            return True
+        # absolute set: "tablet volume 50", "set tablet volume to 100", "tablet awaz 10"
+        if pct is not None:
+            ok, info = _tablet_media_volume(percent=pct)
+            speak(f"Tablet volume set to {info.get('percent', pct)}%" if ok and isinstance(info, dict) else "Tablet command failed", lang=response_lang)
+            return True
+        # report current
+        ok, info = _tablet_media_volume()
+        if ok and isinstance(info, dict):
+            speak(f"Tablet volume is {info.get('percent')}%", lang=response_lang)
+        else:
+            speak("Tablet command failed", lang=response_lang)
+        return True
 
     # Connection/status
     if "connect" in tl or "reconnect" in tl:
@@ -760,11 +810,11 @@ def handle_tablet_command(t, response_lang="en"):
     tl_padded = f" {tl} "
     wants_play_any = wants_play_any or " play " in tl_padded
     if wants_play_any and not any(k in tl for k in ("open", "launch", "start", "close", "stop app", "force stop", "search", "find")):
-        q = tl
-        for kw in tablet_words + ("play", "chalao", "chalao", "bajao", "suna", "sunao", "lagao", "on", "in", "video", "song", "gaana", "gana", "music", "please", "youtube", "yt"):
-            q = re.sub(rf"\b{re.escape(kw)}\b", " ", q)
+        q = (t or tl)
+        for kw in tablet_words + ("play", "chalao", "bajao", "suna", "sunao", "lagao", "on", "in", "video", "song", "gaana", "gana", "music", "please", "youtube", "yt", "tablet"):
+            q = re.sub(rf"\b{re.escape(kw)}\b", " ", q, flags=re.IGNORECASE)
         q = re.sub(r"\s+", " ", q).strip(" ,.-")
-        if q and q not in ("pause", "resume"):
+        if q and q.lower() not in ("pause", "resume"):
             return bool(play_video_on_youtube(q, response_lang=response_lang, tablet=True))
 
     # App launch (voice): "open <app> on tablet", "launch <app> on tablet"
@@ -788,11 +838,11 @@ def handle_tablet_command(t, response_lang="en"):
             return True
 
     # Generic play-on-tablet fallback (when "tablet" present but no explicit YouTube/app match)
-    q = tl
+    q = (t or tl)
     for kw in tablet_words + ("on", "in", "please", "the"):
-        q = re.sub(rf"\b{re.escape(kw)}\b", " ", q)
+        q = re.sub(rf"\b{re.escape(kw)}\b", " ", q, flags=re.IGNORECASE)
     q = re.sub(r"\s+", " ", q).strip(" ,.-")
-    if q and q not in ("status", "connect", "reconnect", "home", "back"):
+    if q and q.lower() not in ("status", "connect", "reconnect", "home", "back"):
         return bool(play_video_on_youtube(q, response_lang=response_lang, tablet=True))
 
     speak("Tablet command not recognized. Try: tablet open/close YouTube, tablet open Chrome, tablet home, tablet play pause, tablet volume up.", lang=response_lang)
