@@ -1522,11 +1522,6 @@ def execute_command(text):
         speak("Going offline. Say my name when you need me." if response_lang=="en" else "Main offline ja raha hoon. Jab zarurat ho mera naam lena.", lang=response_lang)
         return "sleep"
 
-    # Tablet control (ADB) - Galaxy Tab A 2017 on same Wi-Fi
-    if "tablet" in t or "tab a" in t or "galaxy tab" in t or "samsung tab" in t or "sm-t385" in t:
-        if handle_tablet_command(t, response_lang=response_lang):
-            return
-
     # Time / date
     if "time" in t and ("what" in t or "kya" in t or "bata" in t):
         from datetime import datetime
